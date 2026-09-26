@@ -1,0 +1,3113 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Leyendas de Quito — Noche Colonial</title>
+<style>
+  html,body{margin:0;height:100%;background:#05060c;overflow:hidden;touch-action:none;
+    user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+  #wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center}
+  #screen{image-rendering:pixelated;image-rendering:crisp-edges;background:#000;cursor:crosshair}
+  #touch{position:fixed;inset:0;display:none;pointer-events:none}
+  #look{position:absolute;right:0;top:0;width:55%;height:100%;pointer-events:auto}
+  #stick{position:absolute;left:22px;bottom:22px;width:124px;height:124px;border-radius:50%;
+    border:2px solid rgba(238,182,90,.55);background:rgba(19,26,49,.35);pointer-events:auto}
+  #knob{position:absolute;left:40px;top:40px;width:44px;height:44px;border-radius:50%;
+    background:rgba(238,182,90,.45);border:2px solid rgba(255,224,150,.7)}
+  .tb{position:absolute;pointer-events:auto;width:54px;height:54px;border:2px solid #c88c45;
+    background:rgba(19,26,49,.6);color:#ffe096;font:bold 17px monospace;border-radius:10px;
+    display:flex;align-items:center;justify-content:center}
+  #bE{right:24px;bottom:34px;width:70px;height:70px;border-radius:50%;font-size:22px}
+  #bM{right:108px;bottom:24px}
+  #bJ{right:24px;bottom:118px}
+  #bP{right:18px;top:14px;width:44px;height:44px}
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="screen" width="320" height="200"></canvas></div>
+<div id="touch">
+  <div id="look"></div>
+  <div id="stick"><div id="knob"></div></div>
+  <div class="tb" id="bE">E</div>
+  <div class="tb" id="bM">M</div>
+  <div class="tb" id="bJ">J</div>
+  <div class="tb" id="bP">II</div>
+</div>
+<script>
+'use strict';
+/* =====================================================================
+   LEYENDAS DE QUITO — Una noche en la Real Audiencia
+   Raycaster en pixel art nativo, todo generado por código.
+   Secciones: CORE · PALETA/LUT · FUENTE · INPUT · TEXTURAS · SPRITES ·
+              MUNDO · RENDER · AUDIO · MÚSICA · UI · DIÁLOGOS ·
+              ENTIDADES · MISIONES · ESTADOS · BUCLE
+   ===================================================================== */
+
+// ------------------------------------------------------------ CORE ----
+const W = 320, H = 200;
+const FOV = 66 * Math.PI / 180, PLANE = Math.tan(FOV / 2), KPROJ = (W / 2) / PLANE;
+const TAU = Math.PI * 2;
+const cvs = document.getElementById('screen');
+const ctx = cvs.getContext('2d', { alpha: false });
+const IMG = ctx.createImageData(W, H);
+const buf = new Uint32Array(IMG.data.buffer);
+const zbuf = new Float32Array(W * H);
+
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+let RNG = mulberry32(1534);          // 1534: fundación de San Francisco de Quito
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const lerp = (a, b, t) => a + (b - a) * t;
+const smooth = t => t * t * (3 - 2 * t);
+function hash2(x, y) {
+  let h = (Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263)) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+const hash3 = (x, y, z) => hash2(x * 31 + z * 977, y * 57 + z * 131);
+function vnoise(x, y) {
+  const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi;
+  const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+  return lerp(lerp(hash2(xi, yi), hash2(xi + 1, yi), u), lerp(hash2(xi, yi + 1), hash2(xi + 1, yi + 1), u), v);
+}
+function fbm(x, y, o = 3) {
+  let s = 0, a = 0.5, f = 1, n = 0;
+  for (let i = 0; i < o; i++) { s += a * vnoise(x * f, y * f); n += a; f *= 2; a *= 0.5; }
+  return s / n;
+}
+const BAYER = new Float32Array([0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5].map(v => (v + 0.5) / 16));
+const angDiff = (a, b) => { let d = (a - b) % TAU; if (d > Math.PI) d -= TAU; if (d < -Math.PI) d += TAU; return d; };
+
+// ------------------------------------------------------ PALETA / LUT --
+// 47 colores: noche índigo, cal, piedra andesita, madera, oro de farol,
+// azul/verde de balcón, rojo diablo, piel, morados de la tapada y amanecer.
+const PALDEF = [
+  ['negro', '000000'], ['noche0', '0a0c18'], ['noche1', '131a31'], ['noche2', '1d2748'], ['noche3', '2b3962'],
+  ['noche4', '3f5180'], ['niebla', '5d6e96'], ['niebla2', '8593b2'], ['luna', 'c3cad8'], ['cal', 'efeadf'],
+  ['cal2', 'd3c9b5'], ['piedra1', 'aaa190'], ['piedra2', '7d7568'], ['piedra3', '565049'], ['piedra4', '37332e'],
+  ['sombra', '211d1b'], ['madera0', '472c1d'], ['madera1', '6c4326'], ['madera2', '9a6433'], ['ocre', 'c88c45'],
+  ['oro', 'eeb65a'], ['oro2', 'ffe096'], ['llama', 'fff5d6'], ['azul0', '1c4a73'], ['azul1', '2e74a6'],
+  ['verde0', '1d5543'], ['verde1', '3a875c'], ['rojo0', '6e1a1c'], ['rojo1', 'b4302a'], ['naranja', 'e5633b'],
+  ['piel1', 'c48a60'], ['piel0', '8a5638'], ['piel2', 'e2b88e'], ['morado0', '3e2345'], ['morado1', '7c4474'],
+  ['rosa', 'e59aa6'], ['amanecer', 'f4c27a'], ['cielo1', '9fc3df'], ['cielo2', 'd9ebf2'], ['monte0', '25331d'],
+  ['monte1', '4a6632'], ['lavanda', '6b5a8e'], ['teja', 'a2482e'], ['hueso', 'e8e0c8'],
+  ['pizarra0', '2e3452'], ['pizarra', '4a4d5e'], ['crema', 'f3dcb2']
+];
+const NC = PALDEF.length;
+const C = {};
+const PR = new Float32Array(NC), PG = new Float32Array(NC), PB = new Float32Array(NC);
+const PAL32 = new Uint32Array(NC);
+const pack = (r, g, b) => ((255 << 24) | (b << 16) | (g << 8) | r) >>> 0;
+PALDEF.forEach(([n, h], i) => {
+  const v = parseInt(h, 16); C[n] = i;
+  PR[i] = v >> 16; PG[i] = (v >> 8) & 255; PB[i] = v & 255;
+  PAL32[i] = pack(PR[i], PG[i], PB[i]);
+});
+const EM = 64;           // bit de "emisivo" en texturas/sprites
+const TR = 255;          // transparente
+
+const nearCache = new Map();
+function nearest(r, g, b) {
+  r = clamp(r, 0, 255) | 0; g = clamp(g, 0, 255) | 0; b = clamp(b, 0, 255) | 0;
+  const key = ((r >> 2) << 12) | ((g >> 2) << 6) | (b >> 2);
+  let v = nearCache.get(key);
+  if (v !== undefined) return v;
+  let best = 0, bd = 1e12;
+  for (let i = 0; i < NC; i++) {
+    const dr = r - PR[i], dg = g - PG[i], db = b - PB[i], rm = (r + PR[i]) / 2;
+    let d = (2 + rm / 256) * dr * dr + 4 * dg * dg + (2 + (255 - rm) / 256) * db * db;
+    // penaliza colores mucho más saturados que el objetivo (evita manchas moradas en la cal)
+    const ch = Math.max(r, g, b) - Math.min(r, g, b), chc = Math.max(PR[i], PG[i], PB[i]) - Math.min(PR[i], PG[i], PB[i]);
+    const ex = chc - ch - 12; if (ex > 0) d += ex * ex * 9;
+    if (d < bd) { bd = d; best = i; }
+  }
+  nearCache.set(key, best);
+  return best;
+}
+// LUT[(niebla*LITL + luz)*NC + color] -> color final (siempre de la paleta)
+const FOGL = 8, LITL = 17, EMI = 16;
+const LUT = new Uint32Array(FOGL * LITL * NC);
+const ENV_NIGHT = { amb: [0.15, 0.19, 0.4], warm: [1.04, 0.9, 0.68], fog: [44, 54, 84], fogMax: 0.93, fogD: 19 };
+const ENV_DAWN = { amb: [0.8, 0.68, 0.7], warm: [1.1, 0.96, 0.84], fog: [220, 170, 165], fogMax: 0.55, fogD: 70 };
+let ENV = Object.assign({}, ENV_NIGHT);
+let FOGCOL = 0;
+function envMix(a, b, t) {
+  const m = (x, y) => x.map((v, i) => lerp(v, y[i], t));
+  return { amb: m(a.amb, b.amb), warm: m(a.warm, b.warm), fog: m(a.fog, b.fog), fogMax: lerp(a.fogMax, b.fogMax, t), fogD: lerp(a.fogD, b.fogD, t) };
+}
+function buildLUT(env) {
+  ENV = env;
+  for (let f = 0; f < FOGL; f++) {
+    const ff = f / (FOGL - 1) * env.fogMax;
+    for (let l = 0; l < LITL; l++) {
+      let tr, tg, tb;
+      if (l === EMI) { tr = tg = tb = 1.02; }
+      else {
+        const t = Math.pow(l / 15, 1.15);
+        tr = lerp(env.amb[0], env.warm[0], t); tg = lerp(env.amb[1], env.warm[1], t); tb = lerp(env.amb[2], env.warm[2], t);
+      }
+      const base = (f * LITL + l) * NC;
+      for (let c = 0; c < NC; c++) {
+        const r = lerp(PR[c] * tr, env.fog[0], ff), g = lerp(PG[c] * tg, env.fog[1], ff), b = lerp(PB[c] * tb, env.fog[2], ff);
+        LUT[base + c] = PAL32[nearest(r, g, b)];
+      }
+    }
+  }
+  FOGCOL = PAL32[nearest(env.fog[0], env.fog[1], env.fog[2])];
+}
+buildLUT(ENV_NIGHT);
+
+// ------------------------------------------------------------- FUENTE --
+// Fuente bitmap propia 5x7 (proporcional) con tildes, ñ, ¿ y ¡.
+const FONT_SRC = {
+  'A': '.###.|#...#|#...#|#####|#...#|#...#|#...#', 'B': '####.|#...#|#...#|####.|#...#|#...#|####.',
+  'C': '.###.|#...#|#....|#....|#....|#...#|.###.', 'D': '####.|#...#|#...#|#...#|#...#|#...#|####.',
+  'E': '#####|#....|#....|####.|#....|#....|#####', 'F': '#####|#....|#....|####.|#....|#....|#....',
+  'G': '.###.|#...#|#....|#.###|#...#|#...#|.####', 'H': '#...#|#...#|#...#|#####|#...#|#...#|#...#',
+  'I': '###|.#.|.#.|.#.|.#.|.#.|###', 'J': '..###|...#.|...#.|...#.|#..#.|#..#.|.##..',
+  'K': '#...#|#..#.|#.#..|##...|#.#..|#..#.|#...#', 'L': '#....|#....|#....|#....|#....|#....|#####',
+  'M': '#...#|##.##|#.#.#|#.#.#|#...#|#...#|#...#', 'N': '#...#|#...#|##..#|#.#.#|#..##|#...#|#...#',
+  'O': '.###.|#...#|#...#|#...#|#...#|#...#|.###.', 'P': '####.|#...#|#...#|####.|#....|#....|#....',
+  'Q': '.###.|#...#|#...#|#...#|#.#.#|#..#.|.##.#', 'R': '####.|#...#|#...#|####.|#.#..|#..#.|#...#',
+  'S': '.####|#....|#....|.###.|....#|....#|####.', 'T': '#####|..#..|..#..|..#..|..#..|..#..|..#..',
+  'U': '#...#|#...#|#...#|#...#|#...#|#...#|.###.', 'V': '#...#|#...#|#...#|#...#|#...#|.#.#.|..#..',
+  'W': '#...#|#...#|#...#|#.#.#|#.#.#|#.#.#|.#.#.', 'X': '#...#|#...#|.#.#.|..#..|.#.#.|#...#|#...#',
+  'Y': '#...#|#...#|.#.#.|..#..|..#..|..#..|..#..', 'Z': '#####|....#|...#.|..#..|.#...|#....|#####',
+  'a': '....|....|.###|...#|.###|#..#|.###', 'b': '#...|#...|###.|#..#|#..#|#..#|###.',
+  'c': '....|....|.###|#...|#...|#...|.###', 'd': '...#|...#|.###|#..#|#..#|#..#|.###',
+  'e': '....|....|.##.|#..#|####|#...|.###', 'f': '..##|.#..|.#..|###.|.#..|.#..|.#..',
+  'g': '....|....|.###|#..#|#..#|.###|...#|###.', 'h': '#...|#...|###.|#..#|#..#|#..#|#..#',
+  'i': '.#|..|##|.#|.#|.#|.#', 'j': '..#|...|.##|..#|..#|..#|..#|##.',
+  'k': '#...|#...|#..#|#.#.|##..|#.#.|#..#', 'l': '##|.#|.#|.#|.#|.#|.#',
+  'm': '.....|.....|##.#.|#.#.#|#.#.#|#.#.#|#.#.#', 'n': '....|....|###.|#..#|#..#|#..#|#..#',
+  'o': '....|....|.##.|#..#|#..#|#..#|.##.', 'p': '....|....|###.|#..#|#..#|###.|#...|#...',
+  'q': '....|....|.###|#..#|#..#|.###|...#|...#', 'r': '...|...|#.#|##.|#..|#..|#..',
+  's': '....|....|.###|#...|.##.|...#|###.', 't': '.#..|.#..|###.|.#..|.#..|.#..|..##',
+  'u': '....|....|#..#|#..#|#..#|#..#|.###', 'v': '.....|.....|#...#|#...#|.#.#.|.#.#.|..#..',
+  'w': '.....|.....|#...#|#...#|#.#.#|#.#.#|.#.#.', 'x': '....|....|#..#|#..#|.##.|#..#|#..#',
+  'y': '....|....|#..#|#..#|#..#|.###|...#|###.', 'z': '....|....|####|..#.|.#..|#...|####',
+  '0': '.###.|#...#|#..##|#.#.#|##..#|#...#|.###.', '1': '.#.|##.|.#.|.#.|.#.|.#.|###',
+  '2': '.###.|#...#|....#|...#.|..#..|.#...|#####', '3': '####.|....#|....#|.###.|....#|....#|####.',
+  '4': '...#.|..##.|.#.#.|#..#.|#####|...#.|...#.', '5': '#####|#....|####.|....#|....#|#...#|.###.',
+  '6': '.###.|#....|#....|####.|#...#|#...#|.###.', '7': '#####|....#|...#.|..#..|.#...|.#...|.#...',
+  '8': '.###.|#...#|#...#|.###.|#...#|#...#|.###.', '9': '.###.|#...#|#...#|.####|....#|....#|.###.',
+  '.': '.|.|.|.|.|.|#', ',': '..|..|..|..|..|.#|.#|#.', ';': '..|..|.#|..|..|.#|.#|#.', ':': '.|.|#|.|.|.|#',
+  '!': '#|#|#|#|#|.|#', '¡': '#|.|#|#|#|#|#', '?': '.###.|#...#|....#|...#.|..#..|.....|..#..',
+  '¿': '..#..|.....|..#..|.#...|#....|#...#|.###.', '-': '...|...|...|###|...|...|...',
+  "'": '#|#|.|.|.|.|.', '"': '#.#|#.#|...|...|...|...|...', '(': '.#|#.|#.|#.|#.|#.|.#', ')': '#.|.#|.#|.#|.#|.#|#.',
+  '/': '....#|...#.|...#.|..#..|.#...|.#...|#....', '«': '.....|..#.#|.#.#.|#.#..|.#.#.|..#.#|.....',
+  '»': '.....|#.#..|.#.#.|..#.#|.#.#.|#.#..|.....', '[': '##|#.|#.|#.|#.|#.|##', ']': '##|.#|.#|.#|.#|.#|##',
+  '+': '.....|..#..|..#..|#####|..#..|..#..|.....', '=': '....|....|####|....|####|....|....',
+  '>': '#...|.#..|..#.|...#|..#.|.#..|#...', '<': '...#|..#.|.#..|#...|.#..|..#.|...#',
+  '*': '.....|#.#.#|.###.|#####|.###.|#.#.#|.....', '♪': '..##.|..#.#|..#..|..#..|###..|###..|.....',
+  '†': '.#.|###|.#.|.#.|.#.|.#.|...', '·': '.|.|.|#|.|.|.', '%': '##..#|##.#.|...#.|..#..|.#...|.#.##|#..##',
+  '_': '....|....|....|....|....|....|####', '#': '.#.#.|#####|.#.#.|.#.#.|#####|.#.#.|.....', 'ı': '..|..|##|.#|.#|.#|.#'
+};
+const GLYPH = {};
+(function buildFont() {
+  for (const ch in FONT_SRC) {
+    const rows = FONT_SRC[ch].split('|');
+    const bits = []; let w = 0;
+    rows.forEach((r, y) => { w = Math.max(w, r.length); for (let x = 0; x < r.length; x++) if (r[x] === '#') bits.push(x, y); });
+    GLYPH[ch] = { w, bits };
+  }
+  const acc = (base, extra) => ({ w: GLYPH[base].w, bits: GLYPH[base].bits.concat(extra) });
+  const acuteL = (g) => [Math.min(g.w - 1, 2), 0, Math.min(g.w - 1, 2) - 1, 1];
+  for (const [a, b] of [['á', 'a'], ['é', 'e'], ['ó', 'o'], ['ú', 'u']]) GLYPH[a] = acc(b, acuteL(GLYPH[b]));
+  GLYPH['í'] = acc('ı', [1, 0, 0, 1]);
+  GLYPH['ñ'] = acc('n', [0, 1, 1, 0, 2, 1, 3, 0]);
+  GLYPH['ü'] = acc('u', [0, 0, 3, 0]);
+  for (const [a, b] of [['Á', 'A'], ['É', 'E'], ['Í', 'I'], ['Ó', 'O'], ['Ú', 'U']]) GLYPH[a] = acc(b, [3, -2, 2, -1]);
+  GLYPH['Ñ'] = acc('N', [0, -1, 1, -2, 2, -1, 3, -2]);
+})();
+function textWidth(s, sc = 1) {
+  let w = 0;
+  for (const ch of s) w += ch === ' ' ? 3 * sc : ((GLYPH[ch] || GLYPH['?']).w + 1) * sc;
+  return w;
+}
+function drawText(s, x, y, col, shadow = -1, sc = 1) {
+  x |= 0; y |= 0;
+  const c32 = PAL32[col], s32 = shadow >= 0 ? PAL32[shadow] : 0;
+  for (const ch of s) {
+    if (ch === ' ') { x += 3 * sc; continue; }
+    const g = GLYPH[ch] || GLYPH['?'];
+    const b = g.bits;
+    for (let i = 0; i < b.length; i += 2) {
+      const px = x + b[i] * sc, py = y + (b[i + 1] + 2) * sc;
+      for (let yy = 0; yy < sc; yy++) for (let xx = 0; xx < sc; xx++) {
+        if (shadow >= 0) putp(px + xx + sc, py + yy + sc, s32);
+        putp(px + xx, py + yy, c32);
+      }
+    }
+    x += (g.w + 1) * sc;
+  }
+  return x;
+}
+function drawTextC(s, cx, y, col, shadow = -1, sc = 1) { drawText(s, cx - (textWidth(s, sc) >> 1), y, col, shadow, sc); }
+function wrapText(s, maxW) {
+  const out = [];
+  for (const para of s.split('\n')) {
+    let line = '';
+    for (const word of para.split(' ')) {
+      const t = line ? line + ' ' + word : word;
+      if (textWidth(t) > maxW && line) { out.push(line); line = word; } else line = t;
+    }
+    out.push(line);
+  }
+  return out;
+}
+
+// ---------------------------------------------------- DIBUJO 2D (UI) --
+function putp(x, y, c32) { if (x >= 0 && y >= 0 && x < W && y < H) buf[y * W + x] = c32; }
+function rectFill(x, y, w, h, col) {
+  const c = PAL32[col];
+  const x0 = Math.max(0, x | 0), y0 = Math.max(0, y | 0), x1 = Math.min(W, (x + w) | 0), y1 = Math.min(H, (y + h) | 0);
+  for (let j = y0; j < y1; j++) buf.fill(c, j * W + x0, j * W + x1);
+}
+function rectDither(x, y, w, h, col, level) {
+  const c = PAL32[col];
+  const x0 = Math.max(0, x | 0), y0 = Math.max(0, y | 0), x1 = Math.min(W, (x + w) | 0), y1 = Math.min(H, (y + h) | 0);
+  for (let j = y0; j < y1; j++) for (let i = x0; i < x1; i++) if (BAYER[(j & 3) * 4 + (i & 3)] < level) buf[j * W + i] = c;
+}
+function frameBox(x, y, w, h, bg = C.noche1, border = C.ocre, inner = C.madera0) {
+  rectFill(x, y, w, h, bg);
+  rectFill(x, y, w, 1, border); rectFill(x, y + h - 1, w, 1, border);
+  rectFill(x, y, 1, h, border); rectFill(x + w - 1, y, 1, h, border);
+  rectFill(x + 2, y + 2, w - 4, 1, inner); rectFill(x + 2, y + h - 3, w - 4, 1, inner);
+  rectFill(x + 2, y + 2, 1, h - 4, inner); rectFill(x + w - 3, y + 2, 1, h - 4, inner);
+  for (const [cx, cy] of [[x, y], [x + w - 3, y], [x, y + h - 3], [x + w - 3, y + h - 3]]) rectFill(cx, cy, 3, 3, C.oro);
+}
+function blit8(c8, x, y, sc = 1, flip = false, shade = -1) {
+  x |= 0; y |= 0;
+  for (let j = 0; j < c8.h * sc; j++) {
+    const py = y + j; if (py < 0 || py >= H) continue;
+    const sy = (j / sc) | 0;
+    for (let i = 0; i < c8.w * sc; i++) {
+      const px = x + i; if (px < 0 || px >= W) continue;
+      let sx = (i / sc) | 0; if (flip) sx = c8.w - 1 - sx;
+      const v = c8.d[sy * c8.w + sx];
+      if (v === TR) continue;
+      buf[py * W + px] = shade >= 0 ? LUT[(shade * LITL + 15) * NC + (v & 63)] : PAL32[v & 63];
+    }
+  }
+}
+
+// ------------------------------------------------------------ INPUT ---
+const KEYS = {}, JP = new Set();
+let MDX = 0, MDY = 0, CLICK = null;
+const IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+addEventListener('keydown', e => {
+  if (!KEYS[e.code]) JP.add(e.code);
+  KEYS[e.code] = true;
+  AU.unlock();
+  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'Tab'].includes(e.code)) e.preventDefault();
+});
+addEventListener('keyup', e => { KEYS[e.code] = false; });
+addEventListener('blur', () => { for (const k in KEYS) KEYS[k] = false; if (typeof onBlurPause === 'function') onBlurPause(); });
+const jp = (...codes) => codes.some(c => JP.has(c));
+const kd = (...codes) => codes.some(c => KEYS[c]);
+document.addEventListener('mousemove', e => {
+  if (document.pointerLockElement === cvs) { MDX += e.movementX; MDY += e.movementY; }
+});
+function canvasPos(cx, cy) {
+  const r = cvs.getBoundingClientRect();
+  return { x: (cx - r.left) / r.width * W, y: (cy - r.top) / r.height * H };
+}
+cvs.addEventListener('mousedown', e => { CLICK = canvasPos(e.clientX, e.clientY); AU.unlock(); });
+const TOUCH = { mx: 0, my: 0, lookId: null, lx: 0, ly: 0, stickId: null };
+function resize() {
+  let s = Math.min(innerWidth / W, innerHeight / H);
+  if (s >= 2) s = Math.floor(s);
+  cvs.style.width = (W * s) + 'px'; cvs.style.height = (H * s) + 'px';
+}
+addEventListener('resize', resize); resize();
+
+// ========================================================= TEXTURAS ===
+// Lienzos de índices de paleta. 255 = transparente, +64 = emisivo.
+function C8(w, h, f) { return { w, h, d: new Uint8Array(w * h).fill(f === undefined ? TR : f) }; }
+function ps(c, x, y, v) { x = Math.floor(x); y = Math.floor(y); if (x >= 0 && y >= 0 && x < c.w && y < c.h) c.d[y * c.w + x] = v; }
+function pg(c, x, y) { x = Math.floor(x); y = Math.floor(y); return (x >= 0 && y >= 0 && x < c.w && y < c.h) ? c.d[y * c.w + x] : TR; }
+function pr(c, x, y, w, h, v) { for (let j = Math.round(y); j < Math.round(y + h); j++) for (let i = Math.round(x); i < Math.round(x + w); i++) ps(c, i, j, v); }
+function pe(c, cx, cy, rx, ry, v) {
+  for (let j = Math.floor(cy - ry); j <= Math.ceil(cy + ry); j++)
+    for (let i = Math.floor(cx - rx); i <= Math.ceil(cx + rx); i++) {
+      const dx = (i + 0.5 - cx) / rx, dy = (j + 0.5 - cy) / ry;
+      if (dx * dx + dy * dy <= 1) ps(c, i, j, v);
+    }
+}
+function pl(c, x0, y0, x1, y1, v) {
+  const n = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0), 1);
+  for (let i = 0; i <= n; i++) ps(c, Math.round(lerp(x0, x1, i / n)), Math.round(lerp(y0, y1, i / n)), v);
+}
+function pspeck(c, x, y, w, h, cols, p, R = RNG) {
+  for (let j = y; j < y + h; j++) for (let i = x; i < x + w; i++) if (R() < p) ps(c, i, j, cols[(R() * cols.length) | 0]);
+}
+function outline(c, col = C.noche0) {
+  const src = c.d.slice();
+  for (let y = 0; y < c.h; y++) for (let x = 0; x < c.w; x++) {
+    if (src[y * c.w + x] !== TR) continue;
+    const n = (xx, yy) => xx >= 0 && yy >= 0 && xx < c.w && yy < c.h && src[yy * c.w + xx] !== TR;
+    if (n(x - 1, y) || n(x + 1, y) || n(x, y - 1) || n(x, y + 1)) c.d[y * c.w + x] = col;
+  }
+}
+const TEXL = [];         // lista de texturas 32x32 (Uint8Array)
+const TX = {};           // nombre -> id
+function regTex(name, c) { TX[name] = TEXL.length; TEXL.push(c.d); }
+
+function plaster(c, base, alt, seed, y0 = 0, y1 = 32) {
+  for (let y = y0; y < y1; y++) for (let x = 0; x < 32; x++) {
+    const n = fbm(x / 7 + seed * 13.1, y / 6 + seed * 7.7, 3);
+    let v = n > 0.64 ? alt : base;
+    if (RNG() < 0.035) v = alt;
+    if (n < 0.3 && RNG() < 0.05) v = C.piedra1;
+    ps(c, x, y, v);
+  }
+}
+function crack(c, col) {
+  let x = 4 + RNG() * 24, y = 2 + RNG() * 10;
+  for (let i = 0; i < 9; i++) { const nx = x + (RNG() - 0.5) * 4, ny = y + 1 + RNG() * 2; pl(c, x, y, nx, ny, col); x = nx; y = ny; }
+}
+function alero(c) {
+  for (let x = 0; x < 32; x++) {
+    ps(c, x, 0, (x % 4 === 0) ? C.rojo0 : C.teja);
+    ps(c, x, 1, (x % 4 === 0) ? C.madera0 : ((x % 4 === 1) ? C.naranja : C.teja));
+    ps(c, x, 2, C.sombra); ps(c, x, 3, (x % 6 === 0) ? C.madera1 : C.madera0);
+    if (RNG() < 0.5) ps(c, x, 4, C.cal2);
+  }
+}
+function zocalo(c, col, dark) { pr(c, 0, 26, 32, 6, col); pr(c, 0, 26, 32, 1, dark); pspeck(c, 0, 27, 32, 5, [dark], 0.08); }
+
+function genTextures() {
+  RNG = mulberry32(77);
+  // --- casa: planta baja lisa
+  for (const [nm, z, zd] of [['cal_a', C.azul0, C.noche2], ['cal_b', C.ocre, C.madera1], ['cal_c', C.verde0, C.monte0]]) {
+    const c = C8(32, 32); plaster(c, C.cal, C.cal2, RNG()); zocalo(c, z, zd); if (RNG() < 0.8) crack(c, C.cal2); regTex(nm, c);
+  }
+  // --- planta alta con ventana de postigos
+  for (const [nm, w0, w1] of [['up_azul', C.azul0, C.azul1], ['up_verde', C.verde0, C.verde1]]) {
+    const c = C8(32, 32); plaster(c, C.cal, C.cal2, RNG()); alero(c);
+    pr(c, 10, 8, 12, 18, C.piedra1); pr(c, 11, 9, 10, 16, w0);
+    for (let y = 10; y < 24; y += 5) { pr(c, 12, y, 3, 3, w1); pr(c, 17, y, 3, 3, w1); }
+    pr(c, 15, 9, 1, 16, C.noche1); pr(c, 9, 26, 14, 1, C.piedra2); pr(c, 9, 25, 14, 1, C.piedra1);
+    regTex(nm, c);
+  }
+  // --- balcones de madera azul / verde (con ventana iluminada opcional)
+  for (const [nm, w0, w1, lit] of [['balc_azul', C.azul0, C.azul1, 0], ['balc_verde', C.verde0, C.verde1, 0],
+  ['balc_azul_luz', C.azul0, C.azul1, 1], ['balc_verde_luz', C.verde0, C.verde1, 1]]) {
+    const c = C8(32, 32); plaster(c, C.cal, C.cal2, RNG()); alero(c);
+    pr(c, 9, 6, 14, 18, w0);
+    for (let y = 8; y < 22; y++) for (let x = 10; x < 22; x++) {
+      const pane = (x % 4 !== 1) && (y % 5 !== 2);
+      if (pane) ps(c, x, y, lit ? ((y < 14 ? C.oro2 : C.oro) | EM) : (y < 12 ? C.noche3 : C.noche2));
+    }
+    if (lit) { pr(c, 14, 12, 4, 10, C.madera1 | EM); ps(c, 15, 11, C.madera1 | EM); } // silueta tras la cortina
+    pr(c, 15, 6, 2, 18, w0);
+    pr(c, 1, 13, 30, 1, w1); pr(c, 1, 14, 30, 1, w0); pr(c, 1, 23, 30, 1, w0);
+    for (let x = 2; x < 30; x += 3) { pr(c, x, 15, 1, 8, w1); ps(c, x + 1, 17, w0); ps(c, x + 1, 20, w0); }
+    pr(c, 0, 24, 32, 2, C.madera1); pr(c, 0, 26, 32, 1, C.madera0);
+    for (const bx of [3, 27]) { pr(c, bx, 27, 3, 1, C.madera1); pr(c, bx + 1, 28, 2, 1, C.madera1); ps(c, bx + 1, 29, C.madera0); }
+    for (let x = 3; x < 30; x += 7) if (RNG() < 0.7) { pr(c, x, 11, 3, 2, C.madera2); ps(c, x + 1, 10, C.verde1); ps(c, x, 9, C.rosa); ps(c, x + 2, 9, C.rojo1); }
+    regTex(nm, c);
+  }
+  // --- portón de madera con arco de piedra
+  for (const [nm, wood] of [['puerta', C.madera1], ['puerta_v', C.verde0]]) {
+    const c = C8(32, 32); plaster(c, C.cal, C.cal2, RNG()); zocalo(c, C.azul0, C.noche2);
+    pr(c, 7, 8, 18, 24, C.piedra1); pe(c, 16, 9, 9, 6, C.piedra1);
+    pr(c, 9, 10, 14, 22, wood); pe(c, 16, 10, 7, 5, wood);
+    for (let x = 10; x < 23; x += 3) pr(c, x, 7, 1, 25, wood === C.madera1 ? C.madera0 : C.monte0);
+    pe(c, 16, 10, 7, 5, TR); pe(c, 16, 10, 7, 5, wood); for (let x = 10; x < 23; x += 3) pr(c, x, 6, 1, 26, C.madera0);
+    pr(c, 16, 5, 1, 27, C.sombra);
+    for (const yy of [14, 20, 26]) for (const xx of [11, 14, 19, 22]) ps(c, xx, yy, C.piedra3);
+    ps(c, 14, 19, C.oro); ps(c, 18, 19, C.oro);
+    pr(c, 24, 8, 1, 24, C.piedra2); pl(c, 23, 6, 25, 9, C.piedra2);
+    regTex(nm, c);
+  }
+  // --- ventana con reja (oscura / iluminada)
+  for (const [nm, lit] of [['reja', 0], ['reja_luz', 1]]) {
+    const c = C8(32, 32); plaster(c, C.cal, C.cal2, RNG()); zocalo(c, RNG() < 0.5 ? C.azul0 : C.ocre, C.noche2);
+    pr(c, 9, 5, 14, 17, C.piedra1); pr(c, 10, 6, 12, 15, lit ? (C.oro | EM) : C.noche1);
+    if (lit) { pr(c, 10, 6, 12, 4, C.oro2 | EM); pr(c, 10, 6, 3, 15, C.rojo0 | EM); pr(c, 19, 6, 3, 15, C.rojo0 | EM); }
+    for (let x = 11; x < 22; x += 3) pr(c, x, 6, 1, 15, C.piedra4);
+    pr(c, 10, 13, 12, 1, C.piedra4); pr(c, 8, 22, 16, 2, C.piedra2); pr(c, 22, 5, 1, 17, C.piedra2);
+    regTex(nm, c);
+  }
+  // --- tiendas iluminadas (La Ronda, mistelas, chichería)
+  for (const nm of ['tienda', 'mistelas', 'chicheria']) {
+    const c = C8(32, 32); plaster(c, C.cal, C.cal2, RNG()); zocalo(c, C.verde0, C.monte0);
+    pr(c, 6, 5, 20, 27, C.madera1); pr(c, 8, 7, 16, 25, C.ocre | EM);
+    pr(c, 8, 7, 16, 3, C.oro | EM); pe(c, 16, 9, 2, 2, C.llama | EM);
+    pr(c, 8, 21, 16, 4, C.madera2 | EM); pr(c, 8, 24, 16, 1, C.madera0 | EM);
+    if (nm === 'mistelas') {
+      const cols = [C.rosa, C.verde1, C.rojo1, C.oro2, C.azul1, C.naranja];
+      for (let x = 9; x < 23; x += 2) { pr(c, x, 14, 1, 3, cols[(x >> 1) % 6] | EM); ps(c, x, 13, C.cal | EM); }
+      pr(c, 8, 17, 16, 1, C.madera0 | EM);
+    } else if (nm === 'chicheria') {
+      pe(c, 12, 17, 3, 4, C.madera1 | EM); pe(c, 20, 17, 3, 4, C.madera1 | EM); ps(c, 11, 15, C.oro | EM); ps(c, 19, 15, C.oro | EM);
+      pr(c, 6, 1, 20, 3, C.cal2); pr(c, 14, 0, 4, 5, C.rojo1); // bandera roja de la chichería
+    } else {
+      for (let x = 9; x < 23; x += 3) { pr(c, x, 14, 2, 3, C.piedra1 | EM); }
+      pr(c, 8, 17, 16, 1, C.madera0 | EM);
+    }
+    pr(c, 6, 1, 20, 3, nm === 'chicheria' ? C.cal2 : C.madera2);
+    regTex(nm, c);
+  }
+  // --- piedra de sillería (iglesias)
+  function ashlar(c, a, b, mort) {
+    for (let k = 0; k < 4; k++) {
+      const off = (k % 2) * 8;
+      for (let y = k * 8; y < k * 8 + 8; y++) for (let x = 0; x < 32; x++) {
+        const bx = Math.floor((x + off) / 16), col = hash2(bx + k * 7, k * 3) < 0.5 ? a : b;
+        let v = col;
+        if (y === k * 8 || ((x + off) % 16 === 0)) v = mort;
+        else if (y === k * 8 + 1 && RNG() < 0.6) v = C.cal2;
+        else if (RNG() < 0.12) v = (v === a ? b : C.piedra3);
+        ps(c, x, y, v);
+      }
+    }
+  }
+  { const c = C8(32, 32); ashlar(c, C.piedra1, C.piedra2, C.piedra3); regTex('piedra', c); }
+  { const c = C8(32, 32); ashlar(c, C.piedra2, C.piedra3, C.piedra4); regTex('piedra_osc', c); }
+  { // pilastra tallada
+    const c = C8(32, 32); ashlar(c, C.piedra2, C.piedra1, C.piedra3);
+    pr(c, 10, 0, 12, 32, C.piedra1);
+    for (const x of [12, 15, 18]) pr(c, x, 5, 1, 22, C.piedra2);
+    pr(c, 8, 1, 16, 4, C.piedra1); pr(c, 8, 4, 16, 1, C.piedra3); pr(c, 9, 2, 14, 1, C.cal2);
+    pr(c, 8, 27, 16, 4, C.piedra1); pr(c, 8, 27, 16, 1, C.piedra3);
+    pr(c, 21, 0, 1, 32, C.piedra3);
+    regTex('pilastra', c);
+  }
+  { // portada barroca dorada (La Compañía) - planta baja
+    const c = C8(32, 32); ashlar(c, C.piedra2, C.piedra3, C.piedra4);
+    for (const x0 of [2, 24]) for (let y = 0; y < 32; y++) for (let x = x0; x < x0 + 6; x++)
+      ps(c, x, y, (((x + y * 0.6) | 0) % 4 < 2) ? C.oro : ((x === x0 || x === x0 + 5) ? C.madera2 : C.ocre));
+    pr(c, 10, 11, 12, 21, C.piedra1); pe(c, 16, 12, 6, 5, C.piedra1);
+    pr(c, 11, 13, 10, 19, C.madera0); pe(c, 16, 13, 5, 4, C.madera0);
+    for (const yy of [16, 21, 26]) for (const xx of [12, 15, 17, 20]) ps(c, xx, yy, C.oro);
+    pr(c, 16, 9, 1, 23, C.sombra);
+    for (let x = 0; x < 32; x++) { ps(c, x, 0, C.oro); ps(c, x, 1, x % 3 ? C.ocre : C.oro2); ps(c, x, 2, C.madera1); }
+    for (const [rx, ry] of [[9, 6], [22, 6]]) { pe(c, rx, ry, 2, 2, C.oro); ps(c, rx, ry, C.oro2); }
+    regTex('portada', c);
+  }
+  { // portada alta: hornacina con santo
+    const c = C8(32, 32); ashlar(c, C.piedra2, C.piedra3, C.piedra4);
+    for (const x0 of [2, 24]) for (let y = 0; y < 32; y++) for (let x = x0; x < x0 + 6; x++)
+      ps(c, x, y, (((x + y * 0.6) | 0) % 4 < 2) ? C.oro : ((x === x0 || x === x0 + 5) ? C.madera2 : C.ocre));
+    pr(c, 10, 6, 12, 22, C.oro); pe(c, 16, 7, 6, 5, C.oro);
+    pr(c, 11, 7, 10, 20, C.noche1); pe(c, 16, 8, 5, 4, C.noche1);
+    pe(c, 16, 10, 2, 2, C.hueso); pr(c, 14, 13, 5, 12, C.hueso); pr(c, 17, 13, 1, 12, C.piedra1); pr(c, 13, 24, 7, 2, C.piedra1);
+    pe(c, 16, 9, 3, 3, TR); pe(c, 16, 10, 2, 2, C.hueso); ps(c, 16, 7, C.oro2);
+    pe(c, 16, 9, 3.4, 3.4, TR); pe(c, 16, 10, 2, 2, C.hueso); ps(c, 15, 7, C.oro2); ps(c, 16, 7, C.oro2); ps(c, 17, 7, C.oro2);
+    for (let y = 0; y < 32; y++) for (let x = 0; x < 32; x++) if (pg(c, x, y) === TR) ps(c, x, y, C.noche1);
+    pr(c, 8, 29, 16, 3, C.oro); pr(c, 8, 29, 16, 1, C.oro2);
+    regTex('portada_up', c);
+  }
+  { // portada de piedra sobria (San Francisco, Santo Domingo, Carmen Alto)
+    const c = C8(32, 32); ashlar(c, C.piedra1, C.piedra2, C.piedra3);
+    for (const x0 of [3, 25]) { pr(c, x0, 0, 4, 32, C.piedra1); pr(c, x0 + 3, 0, 1, 32, C.piedra3); pr(c, x0 + 1, 3, 1, 26, C.piedra2); }
+    pr(c, 9, 7, 14, 25, C.piedra1); pe(c, 16, 8, 7, 5, C.piedra1);
+    pr(c, 11, 9, 10, 23, C.madera0); pe(c, 16, 9, 5, 4, C.madera0);
+    pr(c, 16, 6, 1, 26, C.sombra);
+    for (const yy of [14, 20, 26]) for (const xx of [12, 14, 18, 20]) ps(c, xx, yy, C.piedra3);
+    pr(c, 0, 0, 32, 2, C.piedra1); pr(c, 0, 2, 32, 1, C.piedra3);
+    regTex('portada_sf', c);
+  }
+  { // campanario con campana
+    const c = C8(32, 32); ashlar(c, C.piedra1, C.piedra2, C.piedra3);
+    pr(c, 7, 8, 18, 22, C.noche0); pe(c, 16, 9, 9, 6, C.noche0);
+    pr(c, 5, 8, 2, 22, C.piedra1); pr(c, 25, 8, 2, 22, C.piedra1);
+    pr(c, 15, 4, 2, 5, C.madera0);
+    for (let y = 9; y < 19; y++) { const hw = 2 + (y - 9) * 0.45; pr(c, 16 - hw, y, hw * 2, 1, y < 12 ? C.oro : C.ocre); ps(c, 16 + hw - 1, y, C.madera2); }
+    pr(c, 11, 19, 10, 1, C.oro); ps(c, 16, 20, C.madera1);
+    pr(c, 0, 29, 32, 3, C.piedra1); pr(c, 0, 29, 32, 1, C.cal2);
+    regTex('campanario', c);
+  }
+  { // remate de torre / cúpula: fuera de la silueta es cielo (transparente)
+    const c = C8(32, 32);
+    pe(c, 16, 33, 15, 18, C.cal2);
+    for (let y = 16; y < 32; y++) for (let x = 0; x < 32; x++) if (pg(c, x, y) === C.cal2) {
+      const m = Math.abs(x - 16);
+      ps(c, x, y, (m % 5 === 0) ? C.piedra2 : (x > 18 ? C.verde0 : C.verde1));
+    }
+    pr(c, 12, 10, 8, 7, C.cal2); pr(c, 14, 12, 4, 5, C.noche1); pr(c, 18, 10, 2, 7, C.piedra2);
+    pe(c, 16, 10, 4, 3, C.verde0); pr(c, 15, 1, 2, 7, C.piedra4); pr(c, 13, 3, 6, 2, C.piedra4); ps(c, 16, 0, C.oro);
+    regTex('cupula', c);
+  }
+  { // remate con pináculo (torres de San Francisco)
+    const c = C8(32, 32);
+    for (let y = 4; y < 32; y++) { const hw = 3 + (y - 4) * 0.48; pr(c, 16 - hw, y, hw * 2, 1, (y % 4 === 0) ? C.piedra2 : C.cal2); pr(c, 16, y, hw, 1, C.piedra1); }
+    for (const x of [2, 29]) { pr(c, x, 18, 2, 14, C.piedra1); pe(c, x + 1, 17, 1.5, 2, C.cal2); }
+    pr(c, 15, 0, 2, 6, C.piedra4); pr(c, 13, 2, 6, 1, C.piedra4);
+    regTex('pinaculo', c);
+  }
+  { // muro de convento encalado, con ventanita
+    const c = C8(32, 32); plaster(c, C.cal2, C.ocre, RNG()); zocalo(c, C.piedra2, C.piedra3);
+    pr(c, 13, 5, 6, 8, C.piedra2); pr(c, 14, 6, 4, 6, C.noche1); pr(c, 15, 6, 1, 6, C.piedra4); pr(c, 14, 9, 4, 1, C.piedra4);
+    crack(c, C.piedra1); regTex('convento', c);
+  }
+  { const c = C8(32, 32); plaster(c, C.cal2, C.ocre, RNG()); alero(c); crack(c, C.piedra1); regTex('convento_up', c); }
+  { // arquería de claustro / portal del palacio
+    for (const [nm, col, lamp] of [['claustro', C.cal, 0], ['arcada', C.piedra1, 1]]) {
+      const c = C8(32, 32); plaster(c, col, col === C.cal ? C.cal2 : C.piedra2, RNG());
+      pr(c, 4, 10, 24, 22, C.noche1); pe(c, 16, 11, 12, 8, C.noche1);
+      pr(c, 8, 16, 16, 16, C.noche0); pe(c, 16, 16, 8, 5, C.noche0);
+      if (lamp) { pr(c, 15, 12, 3, 4, C.oro | EM); ps(c, 16, 13, C.llama | EM); pr(c, 16, 3, 1, 9, C.piedra4); }
+      else { ps(c, 16, 24, C.llama | EM); ps(c, 16, 25, C.oro | EM); ps(c, 16, 26, C.cal2); }
+      pr(c, 0, 0, 4, 32, C.piedra1); pr(c, 28, 0, 4, 32, C.piedra1); pr(c, 3, 0, 1, 32, C.piedra3); pr(c, 31, 0, 1, 32, C.piedra3);
+      pr(c, 0, 8, 5, 2, C.piedra2); pr(c, 27, 8, 5, 2, C.piedra2);
+      pr(c, 0, 30, 32, 2, C.piedra2);
+      regTex(nm, c);
+    }
+  }
+  { // muro de la Catedral: cal y pilastras de piedra
+    const c = C8(32, 32); plaster(c, C.cal, C.cal2, RNG());
+    pr(c, 0, 0, 4, 32, C.piedra1); pr(c, 28, 0, 4, 32, C.piedra1); pr(c, 3, 0, 1, 32, C.piedra2);
+    pr(c, 0, 26, 32, 6, C.piedra2); pr(c, 0, 26, 32, 1, C.piedra1);
+    pr(c, 12, 5, 8, 12, C.piedra1); pr(c, 13, 6, 6, 10, C.noche2); pe(c, 16, 6, 3, 2, C.noche2); pr(c, 16, 6, 1, 10, C.piedra3);
+    regTex('catedral', c);
+  }
+  { const c = C8(32, 32); plaster(c, C.cal, C.cal2, RNG());
+    pr(c, 0, 0, 4, 32, C.piedra1); pr(c, 28, 0, 4, 32, C.piedra1); pr(c, 3, 0, 1, 32, C.piedra2);
+    pe(c, 16, 14, 6, 6, C.piedra1); pe(c, 16, 14, 4, 4, C.noche2); pr(c, 12, 14, 9, 1, C.piedra2); pr(c, 16, 10, 1, 9, C.piedra2);
+    for (let x = 0; x < 32; x++) { ps(c, x, 0, C.piedra1); ps(c, x, 1, C.piedra2); }
+    regTex('catedral_up', c); }
+  { // roca de la quebrada con matorral
+    const c = C8(32, 32);
+    for (let y = 0; y < 32; y++) for (let x = 0; x < 32; x++) {
+      const n = fbm(x / 5, y / 4 + 50, 3);
+      let v = n > 0.6 ? C.piedra3 : n > 0.45 ? C.piedra4 : C.sombra;
+      if (fbm(x / 4 + 20, y / 3, 2) > 0.62) v = (RNG() < 0.5 ? C.monte0 : C.verde0);
+      ps(c, x, y, v);
+    }
+    regTex('roca', c);
+  }
+  { // barandal de piedra
+    const c = C8(32, 32, C.noche1);
+    pr(c, 0, 0, 32, 6, C.piedra1); pr(c, 0, 0, 32, 1, C.cal2); pr(c, 0, 5, 32, 1, C.piedra3);
+    for (let x = 1; x < 32; x += 5) for (let y = 6; y < 28; y++) { const hw = 1 + Math.sin((y - 6) / 22 * Math.PI) * 1.2; pr(c, x + 1.5 - hw, y, hw * 2, 1, C.piedra1); ps(c, x + 1.5 + hw - 1, y, C.piedra2); }
+    pr(c, 0, 28, 32, 4, C.piedra2);
+    regTex('baranda', c);
+  }
+  { // grada (contrahuella de escalón)
+    const c = C8(32, 32); pr(c, 0, 0, 32, 32, C.piedra2);
+    pr(c, 0, 0, 32, 6, C.piedra1); pr(c, 0, 0, 32, 1, C.cal2); pspeck(c, 0, 6, 32, 22, [C.piedra3, C.piedra1], 0.15);
+    pr(c, 0, 28, 32, 4, C.piedra4);
+    regTex('grada', c);
+  }
+  // ------------------------------------------------------- pisos ----
+  { // adoquín: voronoi toroidal
+    const c = C8(32, 32); const pts = [];
+    for (let i = 0; i < 22; i++) pts.push([RNG() * 32, RNG() * 32, RNG()]);
+    for (let y = 0; y < 32; y++) for (let x = 0; x < 32; x++) {
+      let d1 = 1e9, d2 = 1e9, bi = 0;
+      for (let i = 0; i < pts.length; i++) {
+        let dx = Math.abs(x + 0.5 - pts[i][0]), dy = Math.abs(y + 0.5 - pts[i][1]);
+        dx = Math.min(dx, 32 - dx); dy = Math.min(dy, 32 - dy);
+        const d = Math.sqrt(dx * dx + dy * dy);
+        if (d < d1) { d2 = d1; d1 = d; bi = i; } else if (d < d2) d2 = d;
+      }
+      let v;
+      if (d2 - d1 < 1.25) v = C.sombra;
+      else {
+        const p = pts[bi];
+        v = p[2] < 0.45 ? C.piedra3 : p[2] < 0.9 ? C.piedra2 : C.piedra1;
+        let dy = y + 0.5 - p[1]; if (dy > 16) dy -= 32; if (dy < -16) dy += 32;
+        if (dy < -1.2 && d1 < 3) v = v === C.piedra3 ? C.piedra2 : C.piedra1;
+        if (d2 - d1 < 2.2 && dy > 0) v = C.piedra4;
+      }
+      ps(c, x, y, v);
+    }
+    regTex('f_adoquin', c);
+  }
+  { // lajas de plaza
+    const c = C8(32, 32);
+    for (let y = 0; y < 32; y++) for (let x = 0; x < 32; x++) {
+      const row = y >> 4, off = row % 2 ? 8 : 0, bx = ((x + off) >> 4);
+      let v = hash2(bx, row + 5) < 0.5 ? C.piedra2 : C.piedra3;
+      if (y % 16 === 0 || (x + off) % 16 === 0) v = C.piedra4;
+      else if (RNG() < 0.1) v = C.piedra1;
+      ps(c, x, y, v);
+    }
+    pl(c, 3, 4, 9, 8, C.piedra4);
+    regTex('f_laja', c);
+  }
+  { const c = C8(32, 32);
+    for (let y = 0; y < 32; y++) for (let x = 0; x < 32; x++) { const n = fbm(x / 6 + 3, y / 6, 3); ps(c, x, y, n > 0.58 ? C.madera1 : n > 0.4 ? C.madera0 : C.piedra4); }
+    pspeck(c, 0, 0, 32, 32, [C.piedra2, C.piedra3], 0.05); regTex('f_tierra', c); }
+  { const c = C8(32, 32);
+    for (let y = 0; y < 32; y++) for (let x = 0; x < 32; x++) {
+      let v = ((x + y) % 16 === 0 || (x - y + 32) % 16 === 0) ? C.piedra3 : (hash2((x + y) >> 4, (x - y + 32) >> 4) < 0.5 ? C.piedra1 : C.piedra2);
+      if (RNG() < 0.06) v = C.piedra2; ps(c, x, y, v);
+    }
+    regTex('f_atrio', c); }
+  { const c = C8(32, 32);
+    for (let y = 0; y < 32; y++) for (let x = 0; x < 32; x++) { const n = fbm(x / 4, y / 4 + 9, 2); ps(c, x, y, n > 0.6 ? C.verde0 : n > 0.4 ? C.monte1 : C.monte0); }
+    pspeck(c, 0, 0, 32, 32, [C.rosa, C.oro, C.cal], 0.012); regTex('f_jardin', c); }
+  { const c = C8(32, 32);
+    for (let y = 0; y < 32; y++) for (let x = 0; x < 32; x++) { const n = Math.sin(x * 0.4 + Math.sin(y * 0.3) * 2); ps(c, x, y, n > 0.85 ? C.niebla : n > 0.2 ? C.noche3 : C.azul0); }
+    regTex('f_agua', c); }
+  { const c = C8(32, 32);
+    for (let y = 0; y < 32; y++) for (let x = 0; x < 32; x++) { const n = fbm(x / 5, y / 5 + 30, 3); ps(c, x, y, n > 0.6 ? C.monte1 : n > 0.45 ? C.monte0 : C.sombra); }
+    regTex('f_quebrada', c); }
+  { const c = C8(32, 32);
+    for (let y = 0; y < 32; y++) for (let x = 0; x < 32; x++) {
+      const xm = (x + ((y >> 3) % 2) * 2) % 4;
+      let v = xm === 0 ? C.rojo0 : xm === 1 ? C.naranja : C.teja;
+      if (y % 8 === 7) v = C.madera0; else if (y % 8 === 0 && xm !== 0) v = C.rojo0;
+      if (RNG() < 0.04) v = C.monte1;
+      ps(c, x, y, v);
+    }
+    regTex('f_teja', c); }
+}
+
+// ============================================================ SPRITES ===
+const SPR = {};
+function person(o) {
+  const frames = [];
+  for (let f = 0; f < 3; f++) {
+    const c = C8(32, 48);
+    const cx = 16, lo = f === 1 ? 1 : f === 2 ? -1 : 0;
+    const skin = o.skin ?? C.piel1, skinD = o.skinD ?? C.piel0;
+    const coat = o.coat ?? C.noche2, coatD = o.coatD ?? C.noche1;
+    if (o.cape !== undefined) for (let y = 14; y < 44; y++) { const hw = 6 + (y - 14) * 0.3; pr(c, cx - hw, y, hw * 2, 1, o.cape); }
+    if (o.leva) { pr(c, cx - 6, 28, 4, 11, coat); pr(c, cx + 2, 28, 4, 11, coat); pr(c, cx + 5, 28, 1, 11, coatD); }
+    if (o.robe !== undefined) {
+      const rD = o.robeD ?? C.noche0;
+      for (let y = 24; y < 46; y++) {
+        const hw = 5.5 + (y - 24) * (o.wide ? 0.42 : 0.26);
+        pr(c, cx - hw, y, hw * 2, 1, o.robe);
+        pr(c, cx + hw - 2, y, 2, 1, rD);
+        if ((y + (f === 0 ? 0 : lo)) % 7 === 0) ps(c, cx - 2, y, rD);
+        if (y > 30) ps(c, cx + 2 + lo, y, rD);
+      }
+      if (o.hem !== undefined) { const hw = 5.5 + 21 * (o.wide ? 0.42 : 0.26); pr(c, cx - hw, 44, hw * 2, 2, o.hem); }
+      pr(c, cx - 4 + lo, 46, 3, 2, o.shoes ?? C.sombra); pr(c, cx + 1 - lo, 46, 3, 2, o.shoes ?? C.sombra);
+    } else {
+      const pants = o.pants ?? C.noche1;
+      pr(c, cx - 4 + lo, 29, 3, 16, pants); pr(c, cx + 1 - lo, 29, 3, 16, pants);
+      ps(c, cx - 2 + lo, 35, o.pantsD ?? C.noche0); pr(c, cx + 3 - lo, 29, 1, 16, o.pantsD ?? C.noche0);
+      pr(c, cx - 5 + lo, 45, 4, 3, o.shoes ?? C.sombra); pr(c, cx + 1 - lo, 45, 4, 3, o.shoes ?? C.sombra);
+    }
+    pr(c, cx - 6, 15, 12, 15, coat); pr(c, cx + 4, 15, 2, 15, coatD);
+    if (o.shirt !== undefined) { pr(c, cx - 1, 15, 3, 8, o.shirt); ps(c, cx - 2, 15, o.shirt); ps(c, cx + 2, 15, o.shirt); }
+    if (o.tie !== undefined) { pr(c, cx - 1, 15, 3, 1, o.tie); ps(c, cx, 16, o.tie); }
+    if (o.buttons !== undefined) for (let y = 18; y < 29; y += 3) ps(c, cx + 1, y, o.buttons);
+    if (o.belt !== undefined) pr(c, cx - 6, 26, 12, 1, o.belt);
+    if (o.apron !== undefined) pr(c, cx - 4, 22, 8, 16, o.apron);
+    if (o.patches) { ps(c, cx - 4, 20, C.piedra2); ps(c, cx - 3, 20, C.piedra2); ps(c, cx - 4, 21, C.piedra2); ps(c, cx + 2 - lo, 38, C.piedra3); }
+    if (o.poncho !== undefined) {
+      for (let y = 15; y < 32; y++) { const hw = 6.5 + (y - 15) * 0.42; pr(c, cx - hw, y, hw * 2, 1, o.poncho); ps(c, cx + hw - 1, y, o.ponchoD ?? coatD); }
+      if (o.stripe !== undefined) for (const yy of [24, 27]) { const hw = 6.5 + (yy - 15) * 0.42; pr(c, cx - hw, yy, hw * 2, 1, o.stripe); }
+      pr(c, cx - 7, 31, 14, 1, o.ponchoD ?? coatD);
+    }
+    if (o.shawl !== undefined) { for (let y = 15; y < 24; y++) { const hw = 7 - (y - 15) * 0.3; pr(c, cx - hw, y, hw * 2, 1, o.shawl); } ps(c, cx, 23, o.shawlD ?? o.shawl); }
+    const sleeve = o.sleeve ?? (o.poncho !== undefined ? o.poncho : coat);
+    if (!o.noArms) {
+      pr(c, cx - 8, 16 + (lo > 0 ? 1 : 0), 2, 12, sleeve); pr(c, cx + 6, 16 + (lo < 0 ? 1 : 0), 2, 12, sleeve);
+      pr(c, cx - 8, 28 + (lo > 0 ? 1 : 0), 2, 2, skin); pr(c, cx + 6, 28 + (lo < 0 ? 1 : 0), 2, 2, skin);
+    }
+    pr(c, cx - 1, 13, 3, 3, skinD);
+    pe(c, cx, 9.5, 4, 5, skin); pr(c, cx + 3, 6, 1, 7, skinD);
+    ps(c, cx - 2, 9, o.eyes ?? C.sombra); ps(c, cx + 1, 9, o.eyes ?? C.sombra);
+    ps(c, cx, 11, skinD); ps(c, cx - 1, 12, skinD); ps(c, cx, 12, skinD);
+    if (o.mustache !== undefined) { pr(c, cx - 2, 12, 5, 1, o.mustache); }
+    if (o.beard !== undefined) { pr(c, cx - 3, 12, 7, 3, o.beard); ps(c, cx, 12, skinD); }
+    if (o.nose !== undefined) { ps(c, cx, 11, o.nose); ps(c, cx - 1, 11, o.nose); }
+    if (o.blush) { ps(c, cx - 3, 11, C.rosa); ps(c, cx + 2, 11, C.rosa); }
+    if (o.glasses) { ps(c, cx - 2, 9, C.luna); ps(c, cx + 1, 9, C.luna); ps(c, cx - 1, 9, C.piedra4); }
+    if (o.hair !== undefined) {
+      pr(c, cx - 4, 4, 8, 3, o.hair); ps(c, cx - 4, 7, o.hair); ps(c, cx + 3, 7, o.hair);
+      if (o.longHair) { pr(c, cx - 5, 6, 2, 11, o.hair); pr(c, cx + 3, 6, 2, 11, o.hair); }
+      if (o.braids) { pr(c, cx - 5, 8, 1, 14, o.hair); pr(c, cx + 4, 8, 1, 14, o.hair); ps(c, cx - 5, 22, C.rojo1); ps(c, cx + 4, 22, C.rojo1); }
+    }
+    const hat = o.hat, hc = o.hatC ?? C.noche0;
+    if (hat === 'copa') { pr(c, cx - 4, 0, 8, 6, hc); pr(c, cx - 4, 4, 8, 1, o.band ?? C.rojo0); pr(c, cx - 7, 6, 14, 1, hc); pr(c, cx + 2, 0, 1, 6, C.noche2); }
+    if (hat === 'pano') { pe(c, cx, 4, 4, 3, hc); pr(c, cx - 7, 5, 14, 2, hc); pr(c, cx - 4, 4, 8, 1, o.band ?? C.madera0); }
+    if (hat === 'ala') { pr(c, cx - 4, 1, 8, 5, hc); pr(c, cx - 9, 5, 18, 2, hc); pr(c, cx - 4, 4, 8, 1, o.band ?? C.madera0); if (o.feather) pl(c, cx + 3, 1, cx + 7, -3, o.feather); }
+    if (hat === 'bicornio') { pr(c, cx - 8, 4, 16, 2, hc); for (let i = 0; i < 4; i++) pr(c, cx - 5 + i, 3 - i, 10 - i * 2, 1, hc); ps(c, cx - 5, 3, C.oro); }
+    if (hat === 'capucha') {
+      pe(c, cx, 8.5, 6, 7, o.robe); pr(c, cx - 6, 10, 12, 6, o.robe);
+      pe(c, cx, 10, 3.5, 4.2, skinD); pe(c, cx - 0.5, 10.5, 3, 3.6, skin);
+      ps(c, cx - 2, 10, C.sombra); ps(c, cx + 1, 10, C.sombra);
+    }
+    if (hat === 'tonsura') { pr(c, cx - 4, 6, 8, 2, o.hair ?? C.madera0); ps(c, cx - 4, 8, o.hair ?? C.madera0); ps(c, cx + 3, 8, o.hair ?? C.madera0); pr(c, cx - 2, 4, 4, 2, skin); }
+    if (hat === 'manto') {
+      const m = o.manto, mD = o.mantoD ?? C.noche0;
+      pe(c, cx, 9, 6.5, 8, m);
+      for (let y = 12; y < 46; y++) { const hw = 6.5 + (y - 12) * 0.2; pr(c, cx - hw, y, hw * 2, 1, m); pr(c, cx + hw - 2, y, 2, 1, mD); if (y % 6 === 0) ps(c, cx - 1, y, mD); }
+      if (!o.reveal) { pr(c, cx - 3, 8, 3, 3, skin); ps(c, cx - 2, 9, C.noche0); ps(c, cx - 3, 8, C.cal); }
+      else {
+        pe(c, cx, 9.5, 4, 5, C.hueso); pe(c, cx - 1.8, 9, 1.3, 1.5, C.noche0); pe(c, cx + 1.8, 9, 1.3, 1.5, C.noche0);
+        ps(c, cx - 2, 9, C.rojo1 | EM); ps(c, cx + 2, 9, C.rojo1 | EM); ps(c, cx, 11, C.noche0);
+        pr(c, cx - 2, 13, 5, 1, C.noche0); for (let x = cx - 2; x <= cx + 2; x += 2) ps(c, x, 13, C.hueso);
+      }
+      pr(c, cx - 4, 44, 8, 2, C.noche0);
+    }
+    if (hat === 'cuernos') {
+      for (const s of [-1, 1]) { ps(c, cx + s * 3, 4, C.hueso); ps(c, cx + s * 4, 3, C.hueso); ps(c, cx + s * 5, 2, C.hueso); ps(c, cx + s * 5, 1, C.luna); ps(c, cx + s * 4, 4, C.cal2); }
+    }
+    if (o.lantern) { pr(c, cx + 7, 25, 1, 4, C.piedra4); pr(c, cx + 5, 29, 5, 6, C.piedra4); pr(c, cx + 6, 30, 3, 4, C.oro2 | EM); ps(c, cx + 7, 31, C.llama | EM); }
+    if (o.staffLantern) { pl(c, cx + 8, 2, cx + 8, 46, C.madera1); pr(c, cx + 6, 0, 5, 5, C.piedra4); pr(c, cx + 7, 1, 3, 3, C.oro2 | EM); }
+    if (o.halberd) { pl(c, cx + 9, 0, cx + 9, 46, C.madera1); pr(c, cx + 10, 1, 3, 5, C.piedra1); pr(c, cx + 7, 2, 2, 2, C.piedra1); ps(c, cx + 9, 0, C.luna); }
+    if (o.baston) { pl(c, cx + 8, 28, cx + 10, 46, C.madera0); pr(c, cx + 7, 27, 2, 2, C.oro); }
+    if (o.bottle) { pr(c, cx - 10, 25, 3, 6, C.verde0); ps(c, cx - 9, 24, C.madera2); ps(c, cx - 10, 26, C.verde1); }
+    if (o.rosary) { for (let i = 0; i < 8; i++) ps(c, cx - 3 + (i % 2), 17 + i * 1.3, C.hueso); ps(c, cx - 3, 28, C.oro); }
+    if (o.tail) { pl(c, cx + 5, 36, cx + 10, 40, o.tail); pl(c, cx + 10, 40, cx + 12, 36, o.tail); ps(c, cx + 12, 35, o.tail); ps(c, cx + 13, 35, o.tail); }
+    if (o.pitch) { pl(c, cx - 9, 4, cx - 9, 46, C.piedra4); pr(c, cx - 11, 4, 5, 1, C.piedra2); ps(c, cx - 11, 3, C.piedra2); ps(c, cx - 9, 2, C.piedra2); ps(c, cx - 7, 3, C.piedra2); }
+    if (o.post) o.post(c, f, lo);
+    outline(c);
+    frames.push(c);
+  }
+  return frames;
+}
+
+function genSprites() {
+  RNG = mulberry32(99);
+  SPR.cantuna = person({ skin: C.piel0, skinD: C.madera0, hair: C.noche0, longHair: 1, poncho: C.rojo1, ponchoD: C.rojo0, stripe: C.oro, pants: C.cal2, pantsD: C.piedra1, shoes: C.piel0, coat: C.rojo0, hat: 'pano', hatC: C.piedra3 });
+  SPR.diablo = person({ skin: C.rojo1, skinD: C.rojo0, coat: C.rojo0, coatD: C.noche0, pants: C.noche0, cape: C.noche0, hat: 'cuernos', eyes: C.oro2 | EM, beard: C.noche0, tail: C.rojo1, pitch: 1, hair: C.noche0 });
+  SPR.chulla = person({ skin: C.piel2, coat: C.noche2, coatD: C.noche1, shirt: C.cal2, patches: 1, pants: C.noche2, hair: C.noche0, mustache: C.noche0 });
+  SPR.chulla2 = person({ skin: C.piel2, coat: C.noche0, coatD: C.negro, shirt: C.cal, tie: C.noche0, leva: 1, pants: C.piedra3, hair: C.noche0, mustache: C.noche0, hat: 'copa', band: C.noche2, baston: 1, buttons: C.oro });
+  SPR.rosario = person({ skin: C.piel1, robe: C.morado1, robeD: C.morado0, wide: 1, hem: C.oro, coat: C.cal, coatD: C.cal2, shawl: C.azul1, shawlD: C.azul0, hair: C.noche0, braids: 1, hat: 'pano', hatC: C.cal2, band: C.noche2 });
+  SPR.mariana = person({ skin: C.piel1, robe: C.verde1, robeD: C.verde0, wide: 1, hem: C.rosa, coat: C.cal, coatD: C.cal2, shawl: C.rojo1, shawlD: C.rojo0, hair: C.noche0, braids: 1, hat: 'pano', hatC: C.cal2 });
+  SPR.lucho = person({ skin: C.piel2, coat: C.madera1, coatD: C.madera0, shirt: C.cal, pants: C.piedra3, hair: C.piedra1, glasses: 1, sleeve: C.cal2, post: (c) => pl(c, 10, 15, 21, 27, C.oro) });
+  SPR.efrain = person({ skin: C.piel1, coat: C.verde0, coatD: C.monte0, apron: C.madera2, pants: C.noche2, hat: 'ala', hatC: C.madera2, band: C.madera0, mustache: C.piedra3, hair: C.piedra3 });
+  SPR.almeida = person({ skin: C.piel2, robe: C.madera1, robeD: C.madera0, coat: C.madera1, coatD: C.madera0, belt: C.cal, hat: 'tonsura', hair: C.madera0, blush: 1, shoes: C.madera2, post: (c) => { pl(c, 12, 26, 11, 36, C.cal); } });
+  SPR.fraile = person({ skin: C.piel1, robe: C.piedra3, robeD: C.piedra4, coat: C.piedra3, coatD: C.piedra4, belt: C.cal2, hat: 'capucha', lantern: 1, shoes: C.madera0 });
+  SPR.portero = person({ skin: C.piel2, robe: C.piedra3, robeD: C.piedra4, coat: C.piedra3, coatD: C.piedra4, belt: C.cal2, hat: 'tonsura', hair: C.piedra1, shoes: C.madera0, post: (c) => { ps(c, 9, 29, C.oro); ps(c, 9, 30, C.oro); ps(c, 8, 31, C.oro); } });
+  SPR.ramon = person({ skin: C.piel2, coat: C.rojo0, coatD: C.morado0, buttons: C.oro, shirt: C.cal, pants: C.noche2, cape: C.noche3, hat: 'ala', hatC: C.noche1, band: C.oro, feather: C.cal, nose: C.rojo1, blush: 1, bottle: 1, mustache: C.piedra3 });
+  SPR.alguacil = person({ skin: C.piel1, coat: C.azul0, coatD: C.noche2, buttons: C.oro, pants: C.cal2, pantsD: C.piedra1, hat: 'bicornio', halberd: 1, belt: C.cal, mustache: C.noche0, lantern: 1 });
+  SPR.tapada = person({ skin: C.piel2, hat: 'manto', manto: C.noche1, mantoD: C.noche0, robe: C.morado0, robeD: C.noche0, coat: C.noche1, noArms: 1 });
+  SPR.tapada2 = person({ skin: C.piel2, hat: 'manto', manto: C.noche1, mantoD: C.noche0, robe: C.morado0, robeD: C.noche0, coat: C.noche1, noArms: 1, reveal: 1 });
+  SPR.sereno = person({ skin: C.piel1, poncho: C.madera1, ponchoD: C.madera0, stripe: C.ocre, coat: C.madera0, pants: C.noche2, hat: 'ala', hatC: C.piedra3, beard: C.luna, staffLantern: 1 });
+  SPR.beata = person({ skin: C.piel2, robe: C.noche0, robeD: C.negro, coat: C.noche1, hat: 'manto', manto: C.noche0, mantoD: C.negro, rosary: 1, noArms: 1, post: (c) => { pr(c, 12, 8, 3, 3, C.piel2); ps(c, 13, 9, C.noche0); ps(c, 16, 22, C.hueso); } });
+  // --- diablillo (pequeño)
+  SPR.diablillo = [0, 1].map(f => {
+    const c = C8(24, 28);
+    pe(c, 12, 16, 5, 6, C.rojo1); pr(c, 15, 11, 2, 11, C.rojo0);
+    pe(c, 12, 8, 4, 4, C.rojo1); ps(c, 10, 8, C.oro2 | EM); ps(c, 13, 8, C.oro2 | EM); pr(c, 10, 10, 4, 1, C.noche0);
+    for (const s of [-1, 1]) { ps(c, 12 + s * 3, 4, C.hueso); ps(c, 12 + s * 4, 3, C.hueso); ps(c, 12 + s * 4, 2, C.luna); }
+    pr(c, 9 + f, 22, 2, 5, C.rojo0); pr(c, 13 - f, 22, 2, 5, C.rojo0); pr(c, 8 + f, 26, 3, 2, C.noche0); pr(c, 13 - f, 26, 3, 2, C.noche0);
+    pl(c, 17, 20, 22, 24 - f, C.rojo0); ps(c, 22, 23 - f, C.rojo1);
+    pl(c, 5, 2, 5, 27, C.piedra4); pr(c, 3, 2, 5, 1, C.piedra2); ps(c, 3, 1, C.piedra2); ps(c, 5, 0, C.piedra2); ps(c, 7, 1, C.piedra2);
+    pr(c, 6, 14, 3, 2, C.rojo1);
+    outline(c); return c;
+  });
+  // --- gallo de la Catedral (veleta dorada)
+  SPR.gallo = [0, 1].map(f => {
+    const c = C8(24, 24);
+    pe(c, 11, 13, 6, 4, C.oro); pe(c, 11, 12, 5, 3, C.oro2);
+    for (let i = 0; i < 4; i++) pe(c, 5 - i * 0.3, 8 + i * 2, 3, 1.3, [C.ocre, C.oro, C.madera2, C.oro2][i]);
+    pe(c, 17, 7, 2.5, 3, C.oro); ps(c, 18, 6, C.noche0);
+    pr(c, 16, 2, 3, 3, C.rojo1); ps(c, 17, 1, C.rojo1); pr(c, 17, 10, 2, 2, C.rojo1);
+    pr(c, 20, 7, 2, 1, C.naranja); ps(c, 20, 8 + f, C.naranja);
+    pl(c, 10, 17, 9, 21, C.ocre); pl(c, 13, 17, 14, 21, C.ocre); pr(c, 7, 21, 9, 1, C.madera2);
+    pl(c, 11, 22, 11, 23, C.piedra4);
+    outline(c); return c;
+  });
+  // --- Cristo de San Diego sobre peana
+  SPR.cristo = [(() => {
+    const c = C8(32, 48);
+    pr(c, 15, 0, 3, 40, C.madera0); pr(c, 4, 7, 24, 3, C.madera0); pr(c, 17, 0, 1, 40, C.sombra);
+    pe(c, 16, 6, 2.5, 3, C.piel2); pr(c, 14, 3, 5, 2, C.madera1); ps(c, 15, 6, C.madera0);
+    pr(c, 5, 8, 22, 2, C.piel2); pr(c, 14, 9, 5, 12, C.piel2); pr(c, 17, 9, 2, 12, C.piel1);
+    pr(c, 13, 20, 7, 4, C.cal); ps(c, 19, 21, C.cal2);
+    pr(c, 15, 24, 3, 12, C.piel2); pr(c, 17, 24, 1, 12, C.piel1);
+    ps(c, 5, 9, C.rojo0); ps(c, 26, 9, C.rojo0); ps(c, 16, 35, C.rojo0);
+    pe(c, 16, 5, 4.5, 4.5, TR); pe(c, 16, 6, 2.5, 3, C.piel2); pr(c, 14, 3, 5, 1, C.madera1);
+    for (let a = 0; a < 12; a++) ps(c, 16 + Math.cos(a / 12 * TAU) * 4, 5 + Math.sin(a / 12 * TAU) * 4, C.oro);
+    pr(c, 9, 40, 14, 8, C.piedra1); pr(c, 9, 40, 14, 1, C.cal2); pr(c, 21, 40, 2, 8, C.piedra2);
+    outline(c); return c;
+  })()];
+  // --- perro callejero
+  SPR.perro = [0, 1].map(f => {
+    const c = C8(24, 16);
+    pr(c, 5, 6, 12, 5, C.madera1); pr(c, 5, 10, 12, 1, C.madera0);
+    pe(c, 18, 5, 3, 3, C.madera1); ps(c, 19, 4, C.noche0); pr(c, 20, 6, 2, 1, C.madera0); pr(c, 16, 2, 2, 2, C.madera0);
+    pl(c, 5, 6, 2, 3 + f, C.madera1);
+    for (const [x, d] of [[6, f], [9, -f], [14, f], [16, -f]]) pr(c, x + d, 11, 2, 4, C.madera0);
+    outline(c); return c;
+  });
+  // --- dama del balcón (medio cuerpo tras la baranda)
+  SPR.dama = [0, 1].map(f => {
+    const c = C8(32, 36);
+    pe(c, 16, 8, 3.5, 4.5, C.piel2); ps(c, 14, 8, C.noche0); ps(c, 17, 8, C.noche0); ps(c, 15, 10, C.rojo1); ps(c, 16, 10, C.rojo1);
+    pe(c, 16, 6, 6, 5, C.noche0); pe(c, 16, 8, 3.5, 4.5, C.piel2); ps(c, 14, 8, C.noche0); ps(c, 17, 8, C.noche0); ps(c, 15, 10, C.rojo1);
+    pr(c, 13, 1, 7, 2, C.oro); pr(c, 10, 5, 2, 14, C.noche0); pr(c, 21, 5, 2, 14, C.noche0);
+    pr(c, 10, 13, 13, 12, C.rosa); pr(c, 20, 13, 3, 12, C.morado1); pr(c, 14, 13, 5, 3, C.cal);
+    if (f) { pr(c, 6, 14, 5, 5, C.morado1); pl(c, 5, 13, 9, 17, C.oro); } else pr(c, 8, 16, 3, 8, C.rosa);
+    for (let x = 2; x < 30; x += 3) pr(c, x, 24, 1, 10, C.azul1);
+    pr(c, 0, 22, 32, 2, C.azul1); pr(c, 0, 34, 32, 2, C.azul0);
+    outline(c); return c;
+  });
+  // --- objetos
+  SPR.farol = [0, 1].map(f => {
+    const c = C8(12, 20);
+    pr(c, 0, 2, 7, 1, C.piedra4); pl(c, 0, 6, 5, 2, C.piedra4);
+    pr(c, 3, 3, 7, 2, C.piedra4); ps(c, 6, 2, C.piedra4);
+    pr(c, 3, 5, 7, 9, C.piedra4); pr(c, 4, 6, 5, 7, C.oro | EM); pr(c, 5, 7, 3, 5, C.oro2 | EM);
+    pr(c, 6, 8 - f, 1, 3, C.llama | EM); pr(c, 4, 14, 5, 2, C.piedra4); ps(c, 6, 16, C.piedra4);
+    return c;
+  });
+  SPR.poste = [0, 1].map(f => {
+    const c = C8(12, 56);
+    pr(c, 5, 14, 2, 42, C.piedra4); pr(c, 3, 50, 6, 6, C.piedra4); pr(c, 4, 22, 4, 1, C.piedra3);
+    pr(c, 2, 2, 8, 2, C.piedra4); pr(c, 2, 4, 8, 9, C.piedra4); pr(c, 3, 5, 6, 7, C.oro | EM); pr(c, 4, 6, 4, 5, C.oro2 | EM);
+    pr(c, 5, 7 - f, 2, 3, C.llama | EM); pr(c, 3, 13, 6, 1, C.piedra4); ps(c, 5, 1, C.piedra4); ps(c, 6, 0, C.piedra4);
+    return c;
+  });
+  SPR.cruz = [(() => {
+    const c = C8(20, 34);
+    pr(c, 4, 26, 12, 8, C.piedra2); pr(c, 4, 26, 12, 1, C.piedra1); pr(c, 6, 23, 8, 3, C.piedra1);
+    pr(c, 9, 0, 3, 23, C.piedra1); pr(c, 3, 5, 14, 3, C.piedra1); pr(c, 11, 0, 1, 23, C.piedra3); pr(c, 3, 7, 14, 1, C.piedra3);
+    outline(c); return c;
+  })()];
+  SPR.piedra = [(() => {
+    const c = C8(16, 12);
+    pr(c, 1, 2, 14, 10, C.piedra1); pr(c, 1, 2, 14, 2, C.cal2); pr(c, 12, 2, 3, 10, C.piedra2);
+    pl(c, 3, 6, 10, 6, C.piedra3); ps(c, 7, 8, C.piedra3); pr(c, 5, 4, 1, 1, C.oro | EM);
+    outline(c); return c;
+  })()];
+  SPR.panuelo = [(() => { const c = C8(12, 8); pr(c, 1, 3, 10, 4, C.cal); for (let x = 1; x < 11; x += 2) ps(c, x, 7, C.cal2); ps(c, 5, 4, C.noche0); ps(c, 6, 4, C.noche0); outline(c); return c; })()];
+  SPR.huellas = [(() => { const c = C8(20, 6); pe(c, 10, 3, 9, 2.5, C.madera0); for (const x of [4, 8, 12]) { pr(c, x, 2, 2, 1, C.sombra); } return c; })()];
+  SPR.pila = [(() => {
+    const c = C8(16, 40);
+    pr(c, 6, 6, 4, 30, C.piedra1); pr(c, 9, 6, 1, 30, C.piedra2);
+    pe(c, 8, 6, 5, 2, C.piedra1); pe(c, 8, 3, 2, 3, C.piedra1); ps(c, 8, 0, C.piedra1);
+    pr(c, 3, 8, 1, 4, C.niebla2); pr(c, 12, 8, 1, 4, C.niebla2); ps(c, 2, 12, C.niebla2); ps(c, 13, 12, C.niebla2);
+    outline(c); return c;
+  })()];
+  SPR.chispa = [0, 1, 2].map(f => {
+    const c = C8(7, 7);
+    const col = [C.oro2, C.llama, C.oro][f] | EM;
+    ps(c, 3, 3, C.llama | EM); for (let i = 1; i <= 2 + (f % 2); i++) { ps(c, 3 + i, 3, col); ps(c, 3 - i, 3, col); ps(c, 3, 3 + i, col); ps(c, 3, 3 - i, col); }
+    return c;
+  });
+  SPR.humo = [0, 1, 2].map(f => {
+    const c = C8(24, 24);
+    for (let i = 0; i < 9; i++) pe(c, 12 + Math.cos(i * 2.4) * (3 + f * 2.5), 12 + Math.sin(i * 2.4) * (3 + f * 2.5), 4 - f * 0.8, 4 - f * 0.8, [C.rojo1, C.naranja, C.piedra3][(i + f) % 3] | (f < 2 ? EM : 0));
+    return c;
+  });
+  // --- linterna del jugador (primer plano)
+  SPR.mano = [0, 1].map(f => {
+    const c = C8(48, 56);
+    pr(c, 30, 40, 18, 16, C.madera1); pr(c, 30, 40, 18, 2, C.madera2); pr(c, 44, 40, 4, 16, C.madera0);
+    pe(c, 32, 40, 5, 4, C.piel1); pr(c, 28, 38, 7, 4, C.piel1); ps(c, 29, 40, C.piel0);
+    pr(c, 30, 20, 2, 19, C.piedra4);
+    pr(c, 21, 2, 20, 3, C.piedra4); pr(c, 24, 0, 14, 2, C.piedra3); pr(c, 30, -1, 2, 2, C.piedra4);
+    pr(c, 21, 5, 20, 18, C.piedra4); pr(c, 23, 6, 16, 16, C.oro | EM); pr(c, 25, 7, 12, 14, C.oro2 | EM);
+    pr(c, 30, 11 - f, 3, 7 + f, C.llama | EM); ps(c, 31, 10 - f, C.oro2 | EM);
+    pr(c, 31, 5, 1, 18, C.piedra4); pr(c, 21, 13, 20, 1, C.piedra4);
+    pr(c, 20, 23, 22, 3, C.piedra4); pr(c, 23, 26, 16, 2, C.piedra3);
+    outline(c); return c;
+  });
+  // --- íconos de inventario 16x16
+  const icon = (fn) => { const c = C8(16, 16); fn(c); outline(c); return c; };
+  SPR.ic_piedra = icon(c => { pr(c, 2, 4, 12, 9, C.piedra1); pr(c, 2, 4, 12, 2, C.cal2); pr(c, 11, 4, 3, 9, C.piedra2); pl(c, 4, 8, 9, 8, C.piedra3); });
+  SPR.ic_sombrero = icon(c => { pr(c, 4, 2, 8, 9, C.noche0); pr(c, 4, 8, 8, 1, C.noche3); pr(c, 1, 11, 14, 2, C.noche0); });
+  SPR.ic_leva = icon(c => { pr(c, 3, 2, 10, 8, C.noche0); pr(c, 3, 10, 3, 5, C.noche0); pr(c, 10, 10, 3, 5, C.noche0); pr(c, 7, 2, 2, 5, C.cal); ps(c, 8, 7, C.oro); });
+  SPR.ic_baston = icon(c => { pl(c, 4, 15, 11, 3, C.madera0); pr(c, 10, 1, 3, 3, C.oro); });
+  SPR.ic_canelazo = icon(c => { pr(c, 3, 6, 9, 9, C.madera2); pr(c, 3, 6, 9, 1, C.ocre); pr(c, 12, 8, 2, 4, C.madera2); pr(c, 5, 5, 5, 1, C.naranja); ps(c, 5, 2, C.luna); ps(c, 7, 1, C.luna); ps(c, 9, 3, C.luna); });
+  SPR.ic_rebozo = icon(c => { pr(c, 2, 4, 12, 9, C.azul1); pr(c, 2, 8, 12, 1, C.azul0); for (let x = 2; x < 14; x += 2) ps(c, x, 13, C.azul1); });
+  SPR.ic_tijeras = icon(c => { pl(c, 3, 3, 11, 11, C.piedra1); pl(c, 11, 3, 3, 11, C.piedra1); pe(c, 3, 12, 2, 2, C.oro); pe(c, 12, 12, 2, 2, C.oro); });
+  SPR.ic_panuelo = icon(c => { pr(c, 2, 4, 12, 8, C.cal); for (let x = 2; x < 14; x += 2) ps(c, x, 12, C.cal2); ps(c, 7, 7, C.noche0); ps(c, 8, 7, C.noche0); });
+}
+
+// ============================================================= MUNDO ===
+// Cuadrícula de 84x62 celdas (1 celda ≈ 3,5 m). Norte arriba (y crece al sur).
+// Damero del Centro Histórico: calles N–S Imbabura, Cuenca, Benalcázar,
+// García Moreno (Siete Cruces), Venezuela, Guayaquil, Flores; calles E–O
+// Chile, Espejo, Sucre, Bolívar, Rocafuerte y la curva de La Ronda.
+const MW = 84, MH = 62;
+const K_OPEN = 0, K_BLD = 1, K_ZAG = 2, K_LOW = 3, K_VOID = 4;
+const KIND = new Uint8Array(MW * MH).fill(K_BLD);
+const HFL = new Float32Array(MW * MH);       // altura del suelo
+const WH = new Float32Array(MW * MH).fill(2); // altura de pared/objeto sobre el suelo
+const SURF = new Float32Array(MW * MH);      // HFL + WH
+const FTEX = new Uint8Array(MW * MH);        // textura de la superficie superior
+const STY = new Uint8Array(MW * MH);
+const ZONE = new Uint8Array(MW * MH);
+const FACE = new Uint8Array(MW * MH * 4 * 6); // textura por cara (E,O,S,N) y nivel
+const S_CASA = 0, S_RONDA = 1, S_PALACIO = 2, S_CATEDRAL = 3, S_COMPANIA = 4, S_SANFCO = 5, S_IGLESIA = 6,
+  S_CONVENTO = 7, S_ROCA = 8, S_BARANDA = 9, S_PILA = 10, S_TORRE = 11, S_CLAUSTRO = 12, S_CUPULA = 13, S_TORRE_SF = 14;
+const ci = (x, y) => y * MW + x;
+const inMap = (x, y) => x >= 0 && y >= 0 && x < MW && y < MH;
+function rect(x0, y0, x1, y1, fn) { for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (inMap(x, y)) fn(x, y, ci(x, y)); }
+function carve(x0, y0, x1, y1, k = K_OPEN) { rect(x0, y0, x1, y1, (x, y, i) => { KIND[i] = k; WH[i] = 0; }); }
+function block(x0, y0, x1, y1, sty, wh) { rect(x0, y0, x1, y1, (x, y, i) => { if (KIND[i] === K_BLD) { STY[i] = sty; WH[i] = wh; } }); }
+const rondaY = x => 50 + Math.round(Math.sin((x - 42) / 21 * Math.PI));
+function baseH(x, y) {
+  let h = 0.026 * (46 - x) - 0.022 * Math.max(0, y - 10);
+  h += clamp((16 - x) / 8, 0, 1) * clamp((y - 39) / 5, 0, 1) * 1.0; // loma de San Diego
+  return h;
+}
+const q16 = v => Math.round(v * 16) / 16;
+const ZONES = [];   // nombres
+const LAMPS = [];   // faroles {x,y,z,lx,ly,post}
+const LIGHTS = [];  // fuentes de luz estáticas {x,y,r,i}
+
+function buildWorld() {
+  RNG = mulberry32(1534);
+  // --- manzanas con estilo de casa
+  rect(0, 0, MW - 1, MH - 1, (x, y, i) => { STY[i] = S_CASA; WH[i] = 2; });
+  // --- edificios notables
+  block(32, 6, 41, 13, S_PALACIO, 2.2);      // Casa de la Real Audiencia
+  block(44, 0, 51, 3, S_PALACIO, 2.2);       // Palacio Arzobispal
+  block(54, 6, 61, 13, S_PALACIO, 2.2);      // Cabildo
+  block(44, 16, 51, 23, S_CATEDRAL, 3.0);    // Catedral
+  block(32, 16, 41, 23, S_COMPANIA, 3.0);    // La Compañía
+  block(14, 16, 21, 43, S_SANFCO, 2.4);      // convento de San Francisco
+  block(16, 26, 21, 33, S_SANFCO, 3.2);      // nave de San Francisco
+  block(44, 26, 51, 33, S_IGLESIA, 2.6);     // El Sagrario
+  block(32, 36, 41, 43, S_CONVENTO, 2.2);    // Carmen Alto
+  block(74, 36, 81, 43, S_IGLESIA, 3.0);     // Santo Domingo
+  block(1, 47, 11, 58, S_CONVENTO, 1.9);     // San Diego
+  block(1, 47, 11, 47, S_IGLESIA, 2.5);
+  rect(0, 0, MW - 1, 1, (x, y, i) => { STY[i] = S_CASA; });
+  // --- calles N–S
+  for (const [x, y0, y1] of [[12, 2, 53], [22, 2, 45], [32, 2, 45], [42, 2, 55], [52, 2, 55], [62, 2, 53], [72, 2, 45]]) carve(x, y0, x + 1, y1);
+  // --- calles E–O
+  for (const y of [4, 14, 24, 34]) carve(12, y, 81, y + 1);
+  carve(2, 44, 81, 45);                       // Rocafuerte + subida a San Diego
+  // --- La Ronda (calle curva y angosta)
+  for (let x = 42; x <= 63; x++) { const y = rondaY(x); carve(x, y, x, y + 1); }
+  // --- plazas y atrios
+  carve(44, 6, 51, 13);                        // Plaza Grande
+  carve(22, 26, 31, 33);                       // Plaza y atrio de San Francisco
+  carve(64, 36, 71, 43);                       // Plaza de Santo Domingo
+  carve(2, 42, 11, 46);                        // Plaza de San Diego
+  carve(27, 36, 28, 41);                       // Callejón del Cantero
+  carve(42, 54, 53, 55);                       // Mirador de la quebrada
+  // --- convento de San Diego: claustro interior
+  carve(2, 48, 10, 57); carve(6, 47, 6, 47);
+  for (const [x, y] of [[4, 50], [8, 50], [4, 55], [8, 55]]) { const i = ci(x, y); KIND[i] = K_BLD; STY[i] = S_CLAUSTRO; WH[i] = 1.5; }
+  // --- zaguanes (para esconderse)
+  for (const [x, y] of [[55, 3], [58, 3], [61, 3], [66, 3], [69, 3], [57, 6], [60, 6], [54, 17], [54, 21], [44, 38], [41, 30], [50, 3], [47, 3], [65, 16], [34, 3]]) {
+    const i = ci(x, y); KIND[i] = K_ZAG; WH[i] = 0;
+  }
+  // --- quebrada al sur del mirador
+  rect(36, 57, 60, 61, (x, y, i) => { KIND[i] = K_VOID; WH[i] = 0; });
+  rect(41, 56, 54, 56, (x, y, i) => { KIND[i] = K_LOW; STY[i] = S_BARANDA; WH[i] = 0.3; });
+  rect(34, 56, 62, 61, (x, y, i) => { if (KIND[i] === K_BLD) { STY[i] = S_ROCA; WH[i] = 1.2; } });
+  // --- pilas (fuentes)
+  for (const [x0, y0, x1, y1] of [[47, 9, 48, 10], [67, 39, 68, 40], [28, 30, 28, 30], [6, 52, 6, 52]])
+    rect(x0, y0, x1, y1, (x, y, i) => { KIND[i] = K_LOW; STY[i] = S_PILA; WH[i] = 0.35; });
+  // --- torres y cúpulas
+  const tower = (x, y, h, sty = S_TORRE) => rect(x, y, x + 1, y + 1, (xx, yy, i) => { KIND[i] = K_BLD; STY[i] = sty; WH[i] = h; });
+  tower(44, 16, 5.0); tower(48, 19, 4.6, S_CUPULA); tower(36, 19, 4.8, S_CUPULA);
+  tower(20, 26, 5.2, S_TORRE_SF); tower(20, 32, 5.2, S_TORRE_SF);
+  tower(74, 36, 4.6); tower(10, 47, 3.8); tower(46, 28, 3.9, S_CUPULA); tower(34, 38, 3.4);
+  // --- alturas
+  rect(0, 0, MW - 1, MH - 1, (x, y, i) => {
+    const h = baseH(x + 0.5, y + 0.5);
+    HFL[i] = (KIND[i] === K_BLD) ? h - 0.12 : q16(h);
+  });
+  const flat = (x0, y0, x1, y1, h) => rect(x0, y0, x1, y1, (x, y, i) => { if (KIND[i] !== K_BLD) HFL[i] = h; });
+  const hPG = q16(baseH(48, 10)), hSF = q16(baseH(28, 30));
+  flat(44, 6, 51, 13, hPG);
+  flat(44, 15, 51, 15, hPG + 0.19);                           // gradas de la Catedral
+  flat(26, 26, 31, 33, hSF); flat(22, 26, 24, 33, hSF + 0.3); flat(25, 26, 25, 33, hSF + 0.15); // atrio con gradas
+  flat(64, 36, 71, 43, q16(baseH(68, 40)));
+  flat(2, 48, 10, 57, q16(baseH(6, 52))); flat(6, 47, 6, 47, q16(baseH(6, 50)));
+  flat(42, 54, 53, 56, q16(baseH(47, 55)));
+  rect(36, 57, 60, 61, (x, y, i) => { if (KIND[i] === K_VOID) HFL[i] = -4.2; });
+  // objetos bajos: asentados sobre el piso vecino
+  rect(0, 0, MW - 1, MH - 1, (x, y, i) => {
+    if (KIND[i] === K_LOW) { let h = -9; for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const j = ci(x + dx, y + dy); if (inMap(x + dx, y + dy) && KIND[j] !== K_LOW && KIND[j] !== K_BLD && KIND[j] !== K_VOID) h = Math.max(h, HFL[j]); } if (h > -9) HFL[i] = h; }
+  });
+  for (let i = 0; i < MW * MH; i++) SURF[i] = HFL[i] + WH[i];
+  // --- texturas de piso / techo
+  rect(0, 0, MW - 1, MH - 1, (x, y, i) => {
+    const k = KIND[i];
+    let t = TX.f_adoquin;
+    if (k === K_BLD) t = (STY[i] === S_TORRE || STY[i] === S_CUPULA || STY[i] === S_TORRE_SF) ? TX.f_laja : STY[i] === S_ROCA ? TX.f_quebrada : TX.f_teja;
+    else if (k === K_VOID) t = TX.f_quebrada;
+    else if (k === K_LOW) t = STY[i] === S_PILA ? TX.f_agua : TX.f_laja;
+    else if (k === K_ZAG) t = TX.f_laja;
+    FTEX[i] = t;
+  });
+  const floorT = (x0, y0, x1, y1, t) => rect(x0, y0, x1, y1, (x, y, i) => { if (KIND[i] === K_OPEN) FTEX[i] = t; });
+  floorT(44, 6, 51, 15, TX.f_laja); floorT(26, 26, 31, 33, TX.f_laja); floorT(22, 26, 25, 33, TX.f_atrio);
+  floorT(64, 36, 71, 43, TX.f_laja); floorT(2, 42, 11, 46, TX.f_tierra); floorT(2, 48, 10, 57, TX.f_laja);
+  floorT(5, 51, 7, 54, TX.f_jardin); floorT(42, 54, 53, 55, TX.f_laja);
+  // --- estilo La Ronda para casas vecinas a la curva
+  rect(38, 46, 66, 56, (x, y, i) => { if (KIND[i] === K_BLD && STY[i] === S_CASA) STY[i] = S_RONDA; });
+  buildFaces();
+  buildZones();
+  placeLamps();
+}
+
+// ---------------------------------------------------- CARAS / FACHADAS
+const FACE_DIR = [[1, 0], [-1, 0], [0, 1], [0, -1]]; // 0: mira al este, 1: oeste, 2: sur, 3: norte
+function styleTex(sty, x, y, d, lvl) {
+  const h = hash3(x, y, d * 7 + lvl);
+  switch (sty) {
+    case S_CASA: case S_RONDA: {
+      const r = sty === S_RONDA;
+      if (lvl === 0) {
+        if (r) return h < 0.22 ? TX.tienda : h < 0.45 ? TX.reja_luz : h < 0.7 ? TX.puerta : h < 0.8 ? TX.puerta_v : TX.cal_b;
+        return h < 0.3 ? TX.puerta : h < 0.36 ? TX.puerta_v : h < 0.56 ? TX.reja : h < 0.62 ? TX.reja_luz : [TX.cal_a, TX.cal_b, TX.cal_c][(hash2(x >> 2, y >> 2) * 3) | 0];
+      }
+      if (lvl === 1) {
+        if (r) return h < 0.35 ? TX.balc_azul_luz : h < 0.6 ? TX.balc_verde_luz : h < 0.8 ? TX.balc_azul : TX.balc_verde;
+        return h < 0.3 ? TX.balc_azul : h < 0.5 ? TX.balc_verde : h < 0.56 ? TX.balc_azul_luz : h < 0.6 ? TX.balc_verde_luz : h < 0.8 ? TX.up_azul : TX.up_verde;
+      }
+      return TX.up_azul;
+    }
+    case S_PALACIO: return lvl === 0 ? TX.arcada : (h < 0.6 ? TX.balc_verde : TX.balc_verde_luz);
+    case S_CATEDRAL: return lvl === 0 ? TX.catedral : lvl === 1 ? TX.catedral_up : TX.piedra;
+    case S_COMPANIA: return lvl === 0 ? ((x + y) % 3 === 0 ? TX.pilastra : TX.piedra_osc) : lvl === 1 ? TX.piedra_osc : TX.pilastra;
+    case S_SANFCO: return lvl === 0 ? ((x + y) % 4 === 0 ? TX.pilastra : TX.piedra) : TX.convento_up;
+    case S_IGLESIA: return lvl === 0 ? ((x + y) % 3 === 0 ? TX.pilastra : TX.piedra) : lvl === 1 ? TX.catedral_up : TX.piedra;
+    case S_CONVENTO: return lvl === 0 ? TX.convento : TX.convento_up;
+    case S_ROCA: return TX.roca;
+    case S_BARANDA: return TX.baranda;
+    case S_PILA: return TX.grada;
+    case S_CLAUSTRO: return TX.pilastra;
+    case S_TORRE: return [TX.piedra, TX.pilastra, TX.piedra, TX.campanario, TX.cupula, TX.cupula][lvl];
+    case S_TORRE_SF: return [TX.piedra, TX.pilastra, TX.piedra, TX.campanario, TX.pinaculo, TX.pinaculo][lvl];
+    case S_CUPULA: return [TX.catedral_up, TX.catedral_up, TX.catedral_up, TX.catedral_up, TX.cupula, TX.cupula][Math.min(lvl, 5)] ?? TX.cupula;
+  }
+  return TX.cal_a;
+}
+function faceOverride(x0, y0, x1, y1, d, levels) {
+  rect(x0, y0, x1, y1, (x, y, i) => { for (let l = 0; l < 6; l++) FACE[(i * 4 + d) * 6 + l] = levels[Math.min(l, levels.length - 1)]; });
+}
+function buildFaces() {
+  rect(0, 0, MW - 1, MH - 1, (x, y, i) => {
+    for (let d = 0; d < 4; d++) for (let l = 0; l < 6; l++) FACE[(i * 4 + d) * 6 + l] = styleTex(STY[i], x, y, d, l);
+  });
+  // cúpulas: el remate va en el último nivel
+  rect(0, 0, MW - 1, MH - 1, (x, y, i) => {
+    if (STY[i] === S_CUPULA) { const top = Math.floor(WH[i] - 0.01); for (let d = 0; d < 4; d++) for (let l = 0; l < 6; l++) FACE[(i * 4 + d) * 6 + l] = l >= top ? TX.cupula : TX.catedral_up; }
+  });
+  faceOverride(41, 18, 41, 21, 0, [TX.portada, TX.portada_up, TX.pilastra]);          // La Compañía
+  faceOverride(21, 28, 21, 31, 0, [TX.portada_sf, TX.pilastra, TX.piedra, TX.piedra]);  // San Francisco
+  faceOverride(74, 38, 74, 41, 1, [TX.portada_sf, TX.pilastra, TX.piedra]);            // Santo Domingo
+  faceOverride(41, 39, 41, 40, 0, [TX.portada_sf, TX.convento_up]);                     // Carmen Alto
+  faceOverride(45, 16, 50, 16, 3, [TX.portada_sf, TX.catedral_up, TX.piedra]);          // Catedral (portada lateral)
+  faceOverride(5, 47, 7, 47, 3, [TX.portada_sf, TX.pilastra, TX.piedra]);               // San Diego
+  faceOverride(15, 46, 15, 46, 3, [TX.chicheria, TX.balc_verde_luz]);                   // chichería
+  faceOverride(64, 6, 65, 6, 3, [TX.mistelas, TX.balc_azul_luz]);                       // tienda de mistelas
+  faceOverride(11, 49, 11, 56, 1, [TX.convento, TX.convento_up]);
+  // luz de ventanas y tiendas encendidas
+  const lit = new Set([TX.tienda, TX.mistelas, TX.chicheria, TX.reja_luz, TX.balc_azul_luz, TX.balc_verde_luz, TX.arcada]);
+  rect(0, 0, MW - 1, MH - 1, (x, y, i) => {
+    if (KIND[i] !== K_BLD) return;
+    for (let d = 0; d < 4; d++) {
+      const nx = x + FACE_DIR[d][0], ny = y + FACE_DIR[d][1];
+      if (!inMap(nx, ny) || KIND[ci(nx, ny)] !== K_OPEN) continue;
+      for (let l = 0; l < 2; l++) {
+        const t = FACE[(i * 4 + d) * 6 + l];
+        if (lit.has(t) && WH[i] > l) {
+          const strong = t === TX.tienda || t === TX.mistelas || t === TX.chicheria;
+          LIGHTS.push({ x: x + 0.5 + FACE_DIR[d][0] * 0.7, y: y + 0.5 + FACE_DIR[d][1] * 0.7, r: strong ? 3.2 : 2.2, i: strong ? 0.55 : (l === 0 ? 0.3 : 0.18) });
+        }
+      }
+    }
+  });
+}
+
+// ----------------------------------------------------------- ZONAS ---
+function buildZones() {
+  const Z = (name) => { let k = ZONES.indexOf(name); if (k < 0) { ZONES.push(name); k = ZONES.length - 1; } return k; };
+  Z('');
+  const rects = [
+    ['Plaza Grande', 44, 6, 51, 13], ['Gradas de la Catedral', 44, 15, 51, 15], ['Atrio de San Francisco', 22, 26, 25, 33],
+    ['Plaza de San Francisco', 26, 26, 31, 33], ['Callejón del Cantero', 27, 36, 28, 41], ['Plaza de Santo Domingo', 64, 36, 71, 43],
+    ['Convento de San Diego', 1, 47, 11, 58], ['Plaza de San Diego', 2, 42, 11, 43], ['Subida a San Diego', 2, 44, 11, 46],
+    ['Mirador de la Quebrada', 40, 54, 55, 56], ['La Ronda', 42, 48, 63, 53]
+  ];
+  rect(0, 0, MW - 1, MH - 1, (x, y, i) => {
+    if (KIND[i] === K_BLD) return;
+    let z = 0;
+    for (const [n, x0, y0, x1, y1] of rects) if (x >= x0 && x <= x1 && y >= y0 && y <= y1) { z = Z(n); break; }
+    if (!z) {
+      const ns = [[12, 'Calle Imbabura'], [22, 'Calle Cuenca'], [32, 'Calle Benalcázar'], [42, 'Calle de las Siete Cruces'], [52, 'Calle Venezuela'], [62, 'Calle Guayaquil'], [72, 'Calle Flores']];
+      const ew = [[4, 'Calle Chile'], [14, 'Calle Espejo'], [24, 'Calle Sucre'], [34, 'Calle Bolívar'], [44, 'Calle Rocafuerte']];
+      for (const [sx, n] of ns) if (x === sx || x === sx + 1) z = Z(n);
+      if (!z) for (const [sy, n] of ew) if (y === sy || y === sy + 1) z = Z(n);
+      if (KIND[i] === K_ZAG) z = Z('Un zaguán oscuro');
+    }
+    ZONE[i] = z;
+  });
+}
+
+// --------------------------------------------------------- FAROLES ---
+function placeLamps() {
+  const near = (x, y, r) => LAMPS.some(l => Math.hypot(l.x - x, l.y - y) < r);
+  const isB = (x, y) => !inMap(x, y) || KIND[ci(x, y)] === K_BLD;
+  // faroles de pared en calles
+  for (let y = 1; y < MH - 1; y++) for (let x = 1; x < MW - 1; x++) {
+    const i = ci(x, y); if (KIND[i] !== K_OPEN) continue;
+    const zn = ZONES[ZONE[i]];
+    if (zn.startsWith('Plaza') || zn.startsWith('Atrio') || zn.startsWith('Convento') || zn.startsWith('Gradas')) continue;
+    const ronda = zn === 'La Ronda';
+    const spacing = ronda ? 2.6 : 5.2;
+    if (near(x + 0.5, y + 0.5, spacing)) continue;
+    if (hash2(x, y * 3) > (ronda ? 0.8 : 0.55)) continue;
+    for (let d = 0; d < 4; d++) {
+      const bx = x + FACE_DIR[d][0], by = y + FACE_DIR[d][1];
+      if (!isB(bx, by) || STY[ci(bx, by)] === S_ROCA || STY[ci(bx, by)] === S_TORRE) continue;
+      const lx = x + 0.5 + FACE_DIR[d][0] * 0.42, ly = y + 0.5 + FACE_DIR[d][1] * 0.42;
+      LAMPS.push({ x: lx, y: ly, z: 1.15, lx: x + 0.5 + FACE_DIR[d][0] * 0.1, ly: y + 0.5 + FACE_DIR[d][1] * 0.1, post: false });
+      break;
+    }
+  }
+  // postes en plazas
+  const posts = [[44.6, 6.6], [51.4, 6.6], [44.6, 13.4], [51.4, 13.4], [26.6, 26.6], [31.4, 26.6], [26.6, 33.4], [31.4, 33.4],
+  [64.6, 36.6], [71.4, 36.6], [64.6, 43.4], [71.4, 43.4], [3, 42.6], [10.5, 42.6], [3.2, 49.2], [9.6, 49.2], [3.2, 56.6], [9.6, 56.6], [43, 55.5], [52.5, 55.5], [23, 26.8], [23, 33.2]];
+  for (const [x, y] of posts) LAMPS.push({ x, y, z: 0, lx: x, ly: y, post: true });
+  for (const l of LAMPS) LIGHTS.push({ x: l.lx, y: l.ly, r: l.post ? 4.8 : 4.4, i: 0.82 });
+}
+
+// ------------------------------------------------------ MAPA DE LUZ ---
+const LMR = 4, LMW = MW * LMR, LMH = MH * LMR;
+const LM0 = new Float32Array(LMW * LMH), LM = new Float32Array(LMW * LMH);
+function losClear(x0, y0, x1, y1) {
+  const d = Math.hypot(x1 - x0, y1 - y0), n = Math.ceil(d / 0.2);
+  for (let k = 1; k < n; k++) {
+    const t = k / n, x = x0 + (x1 - x0) * t, y = y0 + (y1 - y0) * t;
+    const kk = KIND[ci(x | 0, y | 0)];
+    if (kk === K_BLD) return false;
+  }
+  return true;
+}
+function buildLightmap() {
+  for (let y = 0; y < LMH; y++) for (let x = 0; x < LMW; x++) {
+    const cx = (x / LMR) | 0, cy = (y / LMR) | 0, i = ci(cx, cy);
+    const zn = ZONES[ZONE[i]] || '';
+    LM0[y * LMW + x] = (zn.startsWith('Plaza') || zn.startsWith('Atrio') || zn.startsWith('Mirador')) ? 0.13 : KIND[i] === K_ZAG ? 0.0 : 0.075;
+  }
+  for (const L of LIGHTS) {
+    const r = L.r, x0 = Math.max(0, Math.floor((L.x - r) * LMR)), x1 = Math.min(LMW - 1, Math.ceil((L.x + r) * LMR));
+    const y0 = Math.max(0, Math.floor((L.y - r) * LMR)), y1 = Math.min(LMH - 1, Math.ceil((L.y + r) * LMR));
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+      const wx = (x + 0.5) / LMR, wy = (y + 0.5) / LMR, d = Math.hypot(wx - L.x, wy - L.y);
+      if (d >= r) continue;
+      const k = KIND[ci(wx | 0, wy | 0)];
+      if (k === K_ZAG) continue;
+      let px = wx, py = wy;
+      if (k === K_BLD) { px = wx + (L.x - wx) * Math.min(1, 0.3 / d); py = wy + (L.y - wy) * Math.min(1, 0.3 / d); }
+      if (!losClear(L.x, L.y, px, py)) continue;
+      LM0[y * LMW + x] += L.i * Math.pow(1 - d / r, 1.7);
+    }
+  }
+  LM.set(LM0);
+}
+function stampLight(x, y, r, inten) {
+  const x0 = Math.max(0, Math.floor((x - r) * LMR)), x1 = Math.min(LMW - 1, Math.ceil((x + r) * LMR));
+  const y0 = Math.max(0, Math.floor((y - r) * LMR)), y1 = Math.min(LMH - 1, Math.ceil((y + r) * LMR));
+  for (let yy = y0; yy <= y1; yy++) for (let xx = x0; xx <= x1; xx++) {
+    const d = Math.hypot((xx + 0.5) / LMR - x, (yy + 0.5) / LMR - y);
+    if (d < r) LM[yy * LMW + xx] += inten * Math.pow(1 - d / r, 1.5);
+  }
+}
+function lmAt(x, y) {
+  const lx = (x * LMR) | 0, ly = (y * LMR) | 0;
+  if (lx < 0 || ly < 0 || lx >= LMW || ly >= LMH) return 0.05;
+  return LM[ly * LMW + lx];
+}
+
+// ============================================================ RENDER ===
+// Raycaster de campo de alturas: cada columna recorre la cuadrícula (DDA)
+// de adelante hacia atrás; dibuja pisos, contrahuellas y fachadas con
+// recorte vertical, así se ven torres por encima de los tejados, gradas y
+// pendientes. Luz: mapa de luz de faroles + linterna, con dithering Bayer.
+const PW = 1536, PHH = 150;                       // panorama del cielo
+let PANO = new Uint32Array(PW * PHH);
+let PANO_N = null, PANO_D = null;
+const COLANG = new Float32Array(W);
+for (let x = 0; x < W; x++) COLANG[x] = Math.atan((2 * x / W - 1) * PLANE);
+const RENDER = { flick: 1, lantern: 0.36, lanternR: 3.0, maxD: 34, pitchSky: 0, time: 0, mist: 0.28 };
+
+function buildPano(dawn) {
+  const P = new Uint32Array(PW * PHH);
+  const R = mulberry32(dawn ? 7 : 5);
+  const bands = dawn
+    ? [C.cielo1, C.cielo1, C.cielo2, C.lavanda, C.rosa, C.rosa, C.amanecer, C.amanecer, C.oro2]
+    : [C.noche0, C.noche0, C.noche1, C.noche1, C.noche2, C.noche2, C.noche3, C.noche4, C.niebla];
+  const nb = bands.length;
+  for (let y = 0; y < PHH; y++) for (let x = 0; x < PW; x++) {
+    let t = y / (PHH - 1) * (nb - 1);
+    const east = dawn ? Math.max(0, Math.cos(x / PW * TAU)) : 0;           // el sol sale por el oriente (x=0)
+    t = Math.min(nb - 1, t + east * 1.2 * (y / PHH));
+    const i0 = Math.floor(t), fr = t - i0;
+    const c = (fr > BAYER[(y & 3) * 4 + (x & 3)] && i0 + 1 < nb) ? bands[i0 + 1] : bands[i0];
+    P[y * PW + x] = PAL32[c];
+  }
+  if (!dawn) {
+    // vía láctea
+    for (let x = 0; x < PW; x++) {
+      const cy = 40 + Math.sin(x / PW * TAU + 1.3) * 32;
+      for (let y = Math.max(0, cy - 14); y < Math.min(PHH - 30, cy + 14); y++) {
+        const n = fbm(x / 22, y / 10, 3), k = (y | 0) * PW + x;
+        if (n > 0.55 && R() < (n - 0.5) * 1.2) P[k] = PAL32[R() < 0.7 ? C.noche3 : C.noche4];
+      }
+    }
+    // estrellas
+    for (let i = 0; i < 1300; i++) {
+      const x = (R() * PW) | 0, y = (Math.pow(R(), 1.4) * (PHH - 26)) | 0;
+      const b = R();
+      P[y * PW + x] = PAL32[b < 0.6 ? C.niebla2 : b < 0.9 ? C.luna : C.cal];
+      if (b > 0.985) { for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) if (x + dx >= 0 && x + dx < PW && y + dy >= 0) P[(y + dy) * PW + x + dx] = PAL32[C.niebla2]; }
+    }
+    // luna menguante
+    const mx = (PW * 0.7) | 0, my = 34;
+    for (let y = -14; y <= 14; y++) for (let x = -14; x <= 14; x++) {
+      const d = Math.hypot(x, y), k = (my + y) * PW + mx + x;
+      if (d < 9) { const sh = Math.hypot(x + 4, y - 1) < 8; P[k] = PAL32[sh ? C.noche2 : (fbm(x / 3 + 9, y / 3) > 0.6 ? C.luna : C.cal)]; }
+      else if (d < 14 && BAYER[((y + 14) & 3) * 4 + ((x + 14) & 3)] < (14 - d) / 10) P[k] = PAL32[C.noche4];
+    }
+  } else {
+    // sol naciente tras las lomas del oriente
+    const sx = 30, sy = PHH - 14;
+    for (let y = -24; y <= 24; y++) for (let x = -24; x <= 24; x++) {
+      const d = Math.hypot(x, y), xx = (sx + x + PW) % PW, yy = sy + y;
+      if (yy < 0 || yy >= PHH) continue;
+      if (d < 9) P[yy * PW + xx] = PAL32[d < 6 ? C.llama : C.oro2];
+      else if (d < 24 && BAYER[((y + 24) & 3) * 4 + ((x + 24) & 3)] < (24 - d) / 22) P[yy * PW + xx] = PAL32[C.amanecer];
+    }
+  }
+  // montañas: Pichincha al oeste, Panecillo al sur, lomas al oriente
+  const ridge = (x) => {
+    const a = x / PW * TAU; let h = 6 + fbm(x / 40, 3, 3) * 10;
+    h += Math.max(0, Math.cos(a - Math.PI)) ** 2 * 60 * (0.75 + fbm(x / 25, 7, 3) * 0.5);      // Pichincha (oeste)
+    const pan = Math.exp(-Math.pow(angDiff(a, Math.PI / 2 + 0.12) / 0.2, 2)); h += pan * 40;   // Panecillo (sur)
+    h += Math.max(0, Math.cos(a)) ** 3 * 16;                                                   // Itchimbía (este)
+    return h;
+  };
+  for (let x = 0; x < PW; x++) {
+    const h = ridge(x), a = x / PW * TAU;
+    for (let y = Math.max(0, PHH - h | 0); y < PHH; y++) {
+      const depth = (y - (PHH - h)) / h;
+      let c = dawn ? (depth < 0.08 ? C.rosa : depth < 0.5 ? C.lavanda : C.monte0) : (depth < 0.06 ? C.noche3 : C.noche1);
+      if (dawn && Math.cos(a) > 0.3 && depth < 0.25) c = C.amanecer;
+      P[y * PW + x] = PAL32[c];
+      if (!dawn && R() < 0.004 && depth > 0.3) P[y * PW + x] = PAL32[C.oro | 0];   // candiles de chozas
+    }
+  }
+  // siluetas lejanas de campanarios
+  for (let k = 0; k < 18; k++) {
+    const x0 = (R() * PW) | 0, h = 8 + R() * 16, w = 3 + (R() * 3 | 0);
+    const col = PAL32[dawn ? C.lavanda : C.noche0];
+    for (let y = PHH - h | 0; y < PHH; y++) for (let x = x0; x < x0 + w; x++) P[y * PW + (x % PW)] = col;
+    for (let y = 0; y < 5; y++) for (let x = -1 + (y >> 1); x < w + 1 - (y >> 1); x++) { const yy = (PHH - h - y) | 0; if (yy >= 0) P[yy * PW + ((x0 + x + PW) % PW)] = col; }
+    const yc = (PHH - h - 9) | 0; if (yc >= 0) { P[yc * PW + ((x0 + (w >> 1)) % PW)] = col; P[(yc + 1) * PW + ((x0 + (w >> 1)) % PW)] = col; }
+  }
+  // bruma en el horizonte
+  const fogc = PAL32[dawn ? C.rosa : C.niebla];
+  for (let y = PHH - 12; y < PHH; y++) for (let x = 0; x < PW; x++) if (BAYER[(y & 3) * 4 + (x & 3)] < (y - (PHH - 12)) / 14) P[y * PW + x] = fogc;
+  return P;
+}
+function blendPano(t) {
+  if (t <= 0) { PANO = PANO_N; return; }
+  if (t >= 1) { PANO = PANO_D; return; }
+  if (PANO === PANO_N || PANO === PANO_D) PANO = new Uint32Array(PW * PHH);
+  for (let y = 0; y < PHH; y++) for (let x = 0; x < PW; x++) { const k = y * PW + x; PANO[k] = BAYER[(y & 3) * 4 + (x & 3)] < t ? PANO_D[k] : PANO_N[k]; }
+}
+
+function renderWorld(cam) {
+  const px = cam.x, py = cam.y, ez = cam.z;
+  const hor = Math.round(H / 2 + cam.pitch);
+  const dX = Math.cos(cam.a), dY = Math.sin(cam.a), plX = -dY * PLANE, plY = dX * PLANE;
+  const fogK = (FOGL - 1) / ENV.fogD;
+  const flick = RENDER.flick, lan = RENDER.lantern, lanR = RENDER.lanternR;
+  const maxD = RENDER.maxD;
+  const aNorm = ((cam.a % TAU) + TAU) % TAU;
+  for (let x = 0; x < W; x++) {
+    const camX = 2 * x / W - 1;
+    const rdx = dX + plX * camX, rdy = dY + plY * camX;
+    const rlen = Math.sqrt(rdx * rdx + rdy * rdy);
+    let pc = Math.floor((aNorm + COLANG[x]) / TAU * PW) % PW; if (pc < 0) pc += PW;
+    let mx = Math.floor(px), my = Math.floor(py);
+    const ddx = rdx === 0 ? 1e30 : Math.abs(1 / rdx), ddy = rdy === 0 ? 1e30 : Math.abs(1 / rdy);
+    let stx, sty, sdx, sdy;
+    if (rdx < 0) { stx = -1; sdx = (px - mx) * ddx; } else { stx = 1; sdx = (mx + 1 - px) * ddx; }
+    if (rdy < 0) { sty = -1; sdy = (py - my) * ddy; } else { sty = 1; sdy = (my + 1 - py) * ddy; }
+    let clip = H, dN = 0, side = 0;
+    let cidx = inMap(mx, my) ? ci(mx, my) : 0;
+    let S = SURF[cidx], cft = FTEX[cidx];
+    for (let it = 0; it < 160; it++) {
+      const dF = sdx < sdy ? sdx : sdy;
+      // ---- superficie superior de la celda actual (piso, techo, agua)
+      if (S < ez) {
+        const hgt = (ez - S) * KPROJ;
+        let y0 = Math.ceil(hor + hgt / dF); if (y0 <= hor) y0 = hor + 1; if (y0 < 0) y0 = 0;
+        let y1 = dN < 1e-4 ? H : Math.ceil(hor + hgt / dN); if (y1 > clip) y1 = clip;
+        if (y0 < y1) {
+          const tex = TEXL[cft];
+          for (let y = y0; y < y1; y++) {
+            const d = hgt / (y - hor);
+            const wx = px + rdx * d, wy = py + rdy * d;
+            const v = tex[((Math.floor(wy * 32) & 31) << 5) | (Math.floor(wx * 32) & 31)];
+            const b = BAYER[((y & 3) << 2) | (x & 3)];
+            let L;
+            if (v & EM) L = EMI;
+            else {
+              const ed = d * rlen;
+              let li = lmAt(wx, wy) * flick + (ed < lanR ? lan * (1 - ed / lanR) : 0);
+              L = (li * 15 + b) | 0; if (L > 15) L = 15;
+            }
+            let F = (d * fogK + BAYER[(((y + 2) & 3) << 2) | ((x + 1) & 3)]) | 0; if (F > 7) F = 7;
+            const k = y * W + x;
+            buf[k] = LUT[(F * LITL + L) * NC + (v & 63)];
+            zbuf[k] = d;
+          }
+        }
+        if (y0 < clip) clip = y0;
+      }
+      if (clip <= 0) break;
+      // ---- avanzar a la siguiente celda
+      if (sdx < sdy) { sdx += ddx; mx += stx; side = 0; } else { sdy += ddy; my += sty; side = 1; }
+      dN = dF;
+      if (dN > maxD) break;
+      let S2, c2 = -1, oobStreet = false, oobBase = 0;
+      if (mx < 0 || my < 0 || mx >= MW || my >= MH) {
+        // fuera del plano: el damero de la ciudad continúa hasta el horizonte
+        if (my >= MH) { S2 = -4.2; oobStreet = true; }
+        else {
+          oobBase = baseH(mx + 0.5, my + 0.5) + (mx < 0 ? -mx * 0.08 : 0);
+          oobStreet = (((mx % 10) + 10) % 10) < 2 || (((my % 10) + 10) % 10) < 2;
+          S2 = oobStreet ? oobBase : oobBase + 2 + (hash2(mx >> 2, my >> 2) < 0.08 ? 2.5 : 0);
+        }
+      } else { c2 = ci(mx, my); S2 = SURF[c2]; }
+      if (S2 > S) {
+        // ---- contrahuella / fachada
+        const yT = hor - (S2 - ez) * KPROJ / dN, yB = hor - (S - ez) * KPROJ / dN;
+        let y0 = Math.ceil(yT); if (y0 < 0) y0 = 0;
+        let y1 = Math.ceil(yB); if (y1 > clip) y1 = clip;
+        if (y0 < y1) {
+          const hx = px + rdx * dN, hy = py + rdy * dN;
+          let u, dir;
+          if (side === 0) { u = hy - Math.floor(hy); if (rdx > 0) { u = 1 - u; dir = 1; } else dir = 0; }
+          else { u = hx - Math.floor(hx); if (rdy < 0) { u = 1 - u; dir = 2; } else dir = 3; }
+          const tx = Math.min(31, (u * 32) | 0);
+          const lx = side === 0 ? hx - stx * 0.06 : hx, ly = side === 1 ? hy - sty * 0.06 : hy;
+          const baseLight = lmAt(lx, ly) * flick * (side === 1 ? 0.82 : 1);
+          const ed = dN * rlen, lanL = ed < lanR ? lan * (1 - ed / lanR) : 0;
+          let F = dN * fogK;
+          const step = c2 >= 0 ? (KIND[c2] !== K_BLD && KIND[c2] !== K_LOW) : oobStreet;
+          const base = c2 >= 0 ? HFL[c2] : oobBase;
+          const fbase = (c2 * 4 + dir) * 6;
+          let lastLvl = -1, tex = null;
+          for (let y = y0; y < y1; y++) {
+            const z = ez - (y - hor) * dN / KPROJ;
+            let v;
+            if (step) {
+              tex = TEXL[TX.grada];
+              const ty = Math.min(31, Math.max(0, ((S2 - z) / (S2 - S) * 32) | 0));
+              v = tex[(ty << 5) | tx];
+            } else {
+              let rel = z - base; if (rel < 0) rel = 0;
+              let lvl = Math.floor(rel); if (lvl > 5) lvl = 5;
+              if (lvl !== lastLvl) { tex = TEXL[c2 >= 0 ? FACE[fbase + lvl] : (S2 - base > 3 ? [TX.piedra, TX.pilastra, TX.piedra, TX.campanario, TX.cupula, TX.cupula][lvl] : styleTex(S_CASA, mx, my, dir, lvl))]; lastLvl = lvl; }
+              const ty = 31 - Math.min(31, ((rel - Math.floor(rel)) * 32) | 0);
+              v = tex[(ty << 5) | tx];
+            }
+            const k = y * W + x;
+            if (v === TR) { const r = PHH - 1 - (hor - y); buf[k] = (y > hor) ? FOGCOL : PANO[(r < 0 ? 0 : r) * PW + pc]; zbuf[k] = 1e9; continue; }
+            const b = BAYER[((y & 3) << 2) | (x & 3)];
+            let L;
+            if (v & EM) L = EMI;
+            else {
+              const va = 1.25 - Math.abs(z - base - 1.1) * 0.32;
+              L = ((baseLight * (va < 0.3 ? 0.3 : va > 1 ? 1 : va) + lanL) * 15 + b) | 0; if (L > 15) L = 15;
+            }
+            let Fi = (F + BAYER[(((y + 2) & 3) << 2) | ((x + 1) & 3)]) | 0; if (Fi > 7) Fi = 7;
+            buf[k] = LUT[(Fi * LITL + L) * NC + (v & 63)];
+            zbuf[k] = dN;
+          }
+        }
+        if (y0 < clip) clip = y0;
+        if (clip <= 0) break;
+      }
+      if (c2 >= 0) { cidx = c2; cft = FTEX[c2]; }
+      else cft = my >= MH ? TX.f_quebrada : oobStreet ? TX.f_adoquin : (S2 - oobBase > 3 ? TX.f_laja : TX.f_teja);
+      S = S2;
+    }
+    // ---- cielo
+    for (let y = 0; y < clip; y++) {
+      const k = y * W + x;
+      if (y > hor) buf[k] = FOGCOL;
+      else { const r = PHH - 1 - (hor - y); buf[k] = PANO[(r < 0 ? 0 : r) * PW + pc]; }
+      zbuf[k] = 1e9;
+    }
+  }
+  return hor;
+}
+
+// Sprites billboard (orden de atrás hacia adelante, prueba de profundidad)
+const SPRQ = [];
+function queueSprite(s) { SPRQ.push(s); }
+function renderSprites(cam, hor) {
+  const dX = Math.cos(cam.a), dY = Math.sin(cam.a), plX = -dY * PLANE, plY = dX * PLANE;
+  const inv = 1 / (plX * dY - dX * plY);
+  const fogK = (FOGL - 1) / ENV.fogD;
+  for (const s of SPRQ) {
+    const sx = s.x - cam.x, sy = s.y - cam.y;
+    s._tx = inv * (dY * sx - dX * sy);
+    s._ty = inv * (-plY * sx + plX * sy);
+  }
+  SPRQ.sort((a, b) => b._ty - a._ty);
+  for (const s of SPRQ) {
+    const ty = s._ty; if (ty < 0.12 || ty > RENDER.maxD) continue;
+    const img = s.img;
+    const scrX = (W / 2) * (1 + s._tx / ty);
+    const hpx = s.h * KPROJ / ty, wpx = s.w * KPROJ / ty;
+    const yB = hor - (s.z - cam.z) * KPROJ / ty, yT = yB - hpx, x0 = scrX - wpx / 2;
+    if (x0 > W || x0 + wpx < 0 || yT > H || yB < 0) continue;
+    const ed = Math.hypot(s.x - cam.x, s.y - cam.y);
+    let li = (s.light ?? (lmAt(s.x, s.y) * RENDER.flick)) + (ed < RENDER.lanternR ? RENDER.lantern * (1 - ed / RENDER.lanternR) : 0);
+    const fogBase = ty * fogK;
+    const ix0 = Math.max(0, Math.ceil(x0)), ix1 = Math.min(W, Math.ceil(x0 + wpx));
+    const iy0 = Math.max(0, Math.ceil(yT)), iy1 = Math.min(H, Math.ceil(yB));
+    for (let x = ix0; x < ix1; x++) {
+      let u = ((x - x0) / wpx * img.w) | 0; if (s.flip) u = img.w - 1 - u;
+      for (let y = iy0; y < iy1; y++) {
+        const k = y * W + x;
+        if (zbuf[k] < ty) continue;
+        const v = img.d[(((y - yT) / hpx * img.h) | 0) * img.w + u];
+        if (v === TR) continue;
+        if (s.dither && BAYER[((y & 3) << 2) | (x & 3)] > s.dither) continue;
+        const b = BAYER[((y & 3) << 2) | (x & 3)];
+        let L = (v & EM) ? EMI : Math.min(15, (li * 15 + b) | 0);
+        let F = (fogBase + BAYER[(((y + 2) & 3) << 2) | ((x + 1) & 3)]) | 0; if (F > 7) F = 7;
+        buf[k] = LUT[(F * LITL + L) * NC + (v & 63)];
+      }
+    }
+    if (s.glow) {   // halo del farol con dithering
+      const gx = scrX, gy = yT + hpx * s.glow.y, R = Math.min(34, s.glow.r * KPROJ / ty);
+      const Fi = Math.min(7, fogBase | 0);
+      const c32 = LUT[(Fi * LITL + EMI) * NC + s.glow.c];
+      const rx0 = Math.max(0, (gx - R) | 0), rx1 = Math.min(W, (gx + R + 1) | 0), ry0 = Math.max(0, (gy - R) | 0), ry1 = Math.min(H, (gy + R + 1) | 0);
+      for (let y = ry0; y < ry1; y++) for (let x = rx0; x < rx1; x++) {
+        const d = Math.hypot(x - gx, y - gy) / R; if (d >= 1) continue;
+        const k = y * W + x; if (zbuf[k] < ty - 0.4) continue;
+        const it = (1 - d) * (1 - d) * s.glow.a * RENDER.flick;
+        if (BAYER[((y & 3) << 2) | (x & 3)] < it) buf[k] = c32;
+      }
+    }
+  }
+  SPRQ.length = 0;
+}
+
+// Neblina que se arrastra: capa de ruido con dithering, anclada al ángulo
+const MIST = new Float32Array(256 * 64);
+for (let y = 0; y < 64; y++) for (let x = 0; x < 256; x++) MIST[y * 256 + x] = fbm(x / 26, y / 9, 3);
+function renderMist(cam, hor, t) {
+  const amt = RENDER.mist; if (amt <= 0) return;
+  const off = ((cam.a / TAU) * 1024 + t * 6) | 0;
+  const c32 = FOGCOL;
+  const y0 = Math.max(0, hor - 30), y1 = Math.min(H, hor + 60);
+  for (let y = y0; y < y1; y++) {
+    const my = ((y - hor + 30) * 0.7 + t * 1.3) | 0;
+    const band = 1 - Math.abs(y - hor - 8) / 50;
+    for (let x = 0; x < W; x++) {
+      const k = y * W + x, d = zbuf[k];
+      const dist = d > 30 ? 1 : d / 30;
+      const n = MIST[((my & 63) << 8) | ((x + off) & 255)];
+      const dd = dist - 0.12; if (dd <= 0) continue;
+      const it = (n - 0.42) * 2.4 * amt * band * dd * 1.3;
+      if (it > 0 && BAYER[((y & 3) << 2) | (x & 3)] < it) buf[k] = c32;
+    }
+  }
+}
+
+// ============================================================= AUDIO ===
+// Todo sintetizado con Web Audio: pasos, viento, campanas, perros, búho,
+// grillos y la música andina generativa (quena, rondador, charango, bombo).
+const AU = {
+  ctx: null, ok: false, volMus: 0.7, volSfx: 0.85,
+  unlock() {
+    if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
+      this.ctx = new AC(); this.setup();
+    } catch (e) { this.ctx = null; }
+  },
+  now() { return this.ctx ? this.ctx.currentTime : performance.now() / 1000; },
+  setup() {
+    const c = this.ctx;
+    this.master = c.createGain(); this.master.gain.value = 0.9;
+    const comp = c.createDynamicsCompressor(); comp.threshold.value = -14; comp.ratio.value = 3;
+    this.master.connect(comp); comp.connect(c.destination);
+    this.mus = c.createGain(); this.sfx = c.createGain(); this.amb = c.createGain();
+    this.mus.gain.value = this.volMus * 0.55; this.sfx.gain.value = this.volSfx; this.amb.gain.value = this.volSfx * 0.8;
+    for (const g of [this.mus, this.sfx, this.amb]) g.connect(this.master);
+    this.rev = c.createConvolver(); this.rev.buffer = this.makeIR(3.2);
+    const ro = c.createGain(); ro.gain.value = 0.6; this.rev.connect(ro); ro.connect(this.master);
+    const n = c.sampleRate * 2; this.noise = c.createBuffer(1, n, c.sampleRate);
+    const d = this.noise.getChannelData(0); for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+    this.ks = new Map();
+    this.startWind();
+    this.ok = true;
+  },
+  setVolumes() { if (!this.ok) return; this.mus.gain.value = this.volMus * 0.55; this.sfx.gain.value = this.volSfx; this.amb.gain.value = this.volSfx * 0.8; },
+  makeIR(sec) {
+    const c = this.ctx, len = (sec * c.sampleRate) | 0, b = c.createBuffer(2, len, c.sampleRate);
+    for (let ch = 0; ch < 2; ch++) { const d = b.getChannelData(ch); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.6); }
+    return b;
+  },
+  out(node, bus, wet = 0.2, pan = 0) {
+    let n = node;
+    if (pan && this.ctx.createStereoPanner) { const p = this.ctx.createStereoPanner(); p.pan.value = clamp(pan, -1, 1); node.connect(p); n = p; }
+    n.connect(bus);
+    if (wet > 0) { const g = this.ctx.createGain(); g.gain.value = wet; n.connect(g); g.connect(this.rev); }
+  },
+  env(g, t, a, peak, dec, floor = 0.0001) {
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(peak, t + a); g.gain.exponentialRampToValueAtTime(floor, t + a + dec);
+  },
+  noiseSrc(t, dur, off = Math.random() * 1.5) { const s = this.ctx.createBufferSource(); s.buffer = this.noise; s.start(t, off, dur); return s; },
+  // ---------- efectos
+  step(surface) {
+    if (!this.ok) return; const c = this.ctx, t = c.currentTime;
+    const s = this.noiseSrc(t, 0.14), bp = c.createBiquadFilter(); bp.type = 'bandpass';
+    bp.frequency.value = surface === 'tierra' ? 420 + Math.random() * 200 : surface === 'hierba' ? 900 : 1300 + Math.random() * 900; bp.Q.value = 1.3;
+    const g = c.createGain(); this.env(g, t, 0.004, surface === 'tierra' ? 0.35 : 0.22, 0.08);
+    s.connect(bp); bp.connect(g); this.out(g, this.sfx, 0.12);
+    const o = c.createOscillator(); o.frequency.setValueAtTime(110, t); o.frequency.exponentialRampToValueAtTime(45, t + 0.06);
+    const g2 = c.createGain(); this.env(g2, t, 0.003, 0.2, 0.06); o.connect(g2); this.out(g2, this.sfx, 0.05); o.start(t); o.stop(t + 0.1);
+  },
+  bell(freq = 196, vol = 0.5, pan = 0, at = 0) {
+    if (!this.ok) return; const c = this.ctx, t = (at || c.currentTime) + 0.01;
+    const parts = [[0.5, 1, 5.5], [1, 0.75, 4], [1.19, 0.45, 3], [1.5, 0.35, 2.6], [2, 0.5, 2.2], [2.51, 0.22, 1.4], [2.66, 0.2, 1.2], [3.01, 0.16, 1], [4.17, 0.1, 0.6]];
+    const bus = c.createGain(); bus.gain.value = vol; this.out(bus, this.sfx, 0.5, pan);
+    for (const [r, a, dcy] of parts) {
+      const o = c.createOscillator(); o.frequency.value = freq * r * (1 + (Math.random() - 0.5) * 0.004);
+      const g = c.createGain(); this.env(g, t, 0.004, a * 0.3, dcy * 1.6); o.connect(g); g.connect(bus); o.start(t); o.stop(t + dcy * 1.7);
+    }
+    const s = this.noiseSrc(t, 0.05), hp = c.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 2500;
+    const g = c.createGain(); this.env(g, t, 0.002, 0.2, 0.04); s.connect(hp); hp.connect(g); g.connect(bus);
+  },
+  dog(dist = 1) {
+    if (!this.ok) return; const c = this.ctx; const pan = Math.random() * 2 - 1;
+    const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2200 / dist;
+    const out = c.createGain(); out.gain.value = 0.35 / dist; lp.connect(out); this.out(out, this.amb, 0.6, pan);
+    const n = 2 + (Math.random() * 3 | 0), base = 330 + Math.random() * 180;
+    for (let k = 0; k < n; k++) {
+      const t = c.currentTime + 0.05 + k * (0.22 + Math.random() * 0.1);
+      const o = c.createOscillator(); o.type = 'sawtooth'; o.frequency.setValueAtTime(base * 1.3, t); o.frequency.exponentialRampToValueAtTime(base * 0.7, t + 0.13);
+      const bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 900; bp.Q.value = 2.5;
+      const g = c.createGain(); this.env(g, t, 0.01, 0.6, 0.14); o.connect(bp); bp.connect(g); g.connect(lp); o.start(t); o.stop(t + 0.2);
+    }
+  },
+  owl() {
+    if (!this.ok) return; const c = this.ctx, pan = Math.random() * 2 - 1;
+    for (const [dt, dur] of [[0, 0.35], [0.55, 0.18], [0.8, 0.7]]) {
+      const t = c.currentTime + dt, o = c.createOscillator(); o.frequency.setValueAtTime(390, t); o.frequency.linearRampToValueAtTime(350, t + dur);
+      const g = c.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.07, t + 0.06); g.gain.linearRampToValueAtTime(0.0001, t + dur);
+      o.connect(g); this.out(g, this.amb, 0.7, pan); o.start(t); o.stop(t + dur + 0.05);
+    }
+  },
+  cricket() {
+    if (!this.ok) return; const c = this.ctx, pan = Math.random() * 2 - 1, t0 = c.currentTime;
+    for (let k = 0; k < 6; k++) {
+      const t = t0 + k * 0.07, o = c.createOscillator(); o.frequency.value = 4300 + Math.random() * 200;
+      const g = c.createGain(); this.env(g, t, 0.004, 0.012, 0.03); o.connect(g); this.out(g, this.amb, 0.3, pan); o.start(t); o.stop(t + 0.05);
+    }
+  },
+  blip(f = 700) {
+    if (!this.ok) return; const c = this.ctx, t = c.currentTime;
+    const o = c.createOscillator(); o.type = 'square'; o.frequency.value = f + Math.random() * 60;
+    const g = c.createGain(); this.env(g, t, 0.002, 0.025, 0.03); o.connect(g); this.out(g, this.sfx, 0); o.start(t); o.stop(t + 0.05);
+  },
+  chime() {
+    if (!this.ok) return; const t = this.ctx.currentTime;
+    [0, 3, 5, 7, 10].forEach((s, k) => MUSIC.quena(t + k * 0.08, 440 * Math.pow(2, s / 12) * 2, 0.25, 0.18, this.sfx));
+  },
+  fanfare() {
+    if (!this.ok) return; const t = this.ctx.currentTime;
+    [[0, 0], [0.18, 3], [0.36, 7], [0.54, 12], [0.9, 10], [1.1, 12]].forEach(([d, s]) => MUSIC.quena(t + d, 440 * Math.pow(2, s / 12), d > 0.8 ? 0.7 : 0.2, 0.3, this.sfx));
+    this.bell(262, 0.35, 0, t + 0.9);
+  },
+  laugh() {
+    if (!this.ok) return; const c = this.ctx, t = c.currentTime;
+    const o = c.createOscillator(); o.type = 'sawtooth'; o.frequency.setValueAtTime(150, t); o.frequency.linearRampToValueAtTime(70, t + 1.6);
+    const lfo = c.createOscillator(); lfo.frequency.value = 7; const lg = c.createGain(); lg.gain.value = 0.2;
+    const g = c.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.25, t + 0.05); g.gain.linearRampToValueAtTime(0.0001, t + 1.7);
+    const am = c.createGain(); am.gain.value = 0.25; lfo.connect(lg); lg.connect(am.gain);
+    const bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 700; bp.Q.value = 1.5;
+    o.connect(bp); bp.connect(am); am.connect(g); this.out(g, this.sfx, 0.6); o.start(t); lfo.start(t); o.stop(t + 1.8); lfo.stop(t + 1.8);
+  },
+  caught() {
+    if (!this.ok) return; const c = this.ctx, t = c.currentTime;
+    for (const f of [110, 116.5, 55]) {
+      const o = c.createOscillator(); o.type = 'sawtooth'; o.frequency.value = f;
+      const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 900;
+      const g = c.createGain(); this.env(g, t, 0.02, 0.12, 0.9); o.connect(lp); lp.connect(g); this.out(g, this.sfx, 0.3); o.start(t); o.stop(t + 1);
+    }
+  },
+  crow() {
+    if (!this.ok) return; const c = this.ctx, t = c.currentTime;
+    const o = c.createOscillator(); o.type = 'sawtooth';
+    o.frequency.setValueAtTime(480, t); o.frequency.linearRampToValueAtTime(820, t + 0.12); o.frequency.setValueAtTime(760, t + 0.3);
+    o.frequency.linearRampToValueAtTime(900, t + 0.55); o.frequency.exponentialRampToValueAtTime(420, t + 1.1);
+    const bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1500; bp.Q.value = 3;
+    const g = c.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.35, t + 0.05); g.gain.setValueAtTime(0.3, t + 0.9); g.gain.linearRampToValueAtTime(0.0001, t + 1.15);
+    o.connect(bp); bp.connect(g); this.out(g, this.sfx, 0.45); o.start(t); o.stop(t + 1.2);
+  },
+  whoosh() {
+    if (!this.ok) return; const c = this.ctx, t = c.currentTime;
+    const s = this.noiseSrc(t, 1.2), bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 2;
+    bp.frequency.setValueAtTime(300, t); bp.frequency.exponentialRampToValueAtTime(2400, t + 0.5); bp.frequency.exponentialRampToValueAtTime(200, t + 1.1);
+    const g = c.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.3, t + 0.4); g.gain.linearRampToValueAtTime(0.0001, t + 1.1);
+    s.connect(bp); bp.connect(g); this.out(g, this.sfx, 0.5);
+  },
+  ghost() {
+    if (!this.ok) return; const c = this.ctx, t = c.currentTime;
+    for (const f of [520, 527]) {
+      const o = c.createOscillator(); o.frequency.setValueAtTime(f, t); o.frequency.linearRampToValueAtTime(f * 0.5, t + 2.4);
+      const g = c.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.07, t + 0.5); g.gain.linearRampToValueAtTime(0.0001, t + 2.5);
+      o.connect(g); this.out(g, this.sfx, 0.9); o.start(t); o.stop(t + 2.6);
+    }
+  },
+  peck() {
+    if (!this.ok) return; const c = this.ctx, t = c.currentTime;
+    for (let k = 0; k < 3; k++) { const s = this.noiseSrc(t + k * 0.09, 0.03), hp = c.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 1800; const g = c.createGain(); this.env(g, t + k * 0.09, 0.001, 0.5, 0.03); s.connect(hp); hp.connect(g); this.out(g, this.sfx, 0.2); }
+  },
+  // ---------- viento continuo con ráfagas
+  startWind() {
+    const c = this.ctx;
+    const s = c.createBufferSource(); s.buffer = this.noise; s.loop = true;
+    const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 500;
+    const bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 900; bp.Q.value = 6;
+    const g = c.createGain(); g.gain.value = 0.1; const g2 = c.createGain(); g2.gain.value = 0.02;
+    s.connect(lp); lp.connect(g); g.connect(this.amb); s.connect(bp); bp.connect(g2); g2.connect(this.amb);
+    s.start();
+    this.wind = { lp, bp, g, g2 };
+  },
+  ambT: 0,
+  update(dt, t, windy = 1) {
+    if (!this.ok) return;
+    const gust = fbm(t * 0.12, 3.3, 3);
+    const w = this.wind, now = this.ctx.currentTime;
+    w.lp.frequency.setTargetAtTime(300 + gust * 900 * windy, now, 0.3);
+    w.g.gain.setTargetAtTime((0.04 + gust * gust * 0.2) * windy, now, 0.3);
+    w.bp.frequency.setTargetAtTime(600 + gust * 1100, now, 0.4);
+    w.g2.gain.setTargetAtTime(gust > 0.62 ? 0.03 * windy : 0.004, now, 0.5);
+    this.ambT -= dt;
+    if (this.ambT <= 0) {
+      this.ambT = 4 + Math.random() * 9;
+      const r = Math.random();
+      if (r < 0.35) this.dog(1.5 + Math.random() * 2.5);
+      else if (r < 0.55) this.owl();
+      else if (r < 0.85) this.cricket();
+      else this.bell(130 + Math.random() * 60, 0.12, Math.random() * 2 - 1);
+    }
+  }
+};
+
+// ============================================================ MÚSICA ===
+// Generativa y original: cadenas de Markov sobre la pentatónica menor andina.
+// Yaraví (3/4, lento, melancólico), sanjuanito (2/4, bombo "tum-tu-tu"),
+// tensión (latido y quena grave) y amanecer (pentatónica mayor luminosa).
+const PENT = [0, 3, 5, 7, 10], PENTM = [0, 2, 4, 7, 9];
+const MUSIC = {
+  mode: 'off', next: 0, step: 0, song: null, tempo: 1, onBeat: null,
+  noteF(idx, major) { const sc = major ? PENTM : PENT, root = major ? 261.63 : 220; return root * Math.pow(2, (12 * Math.floor(idx / 5) + sc[((idx % 5) + 5) % 5]) / 12); },
+  set(mode) {
+    if (mode === this.mode) return;
+    this.mode = mode; this.step = 0; this.song = null;
+    this.next = AU.ok ? AU.ctx.currentTime + 0.4 : 0;
+  },
+  startAt(mode, t) { this.mode = mode; this.step = 0; this.song = null; this.next = t; },
+  melody(bars, stepsPerBar, pats, lo, hi, start, endOn, major) {
+    const out = []; let cur = start;
+    for (let b = 0; b < bars; b++) {
+      const last = b === bars - 1;
+      const pat = last ? pats.end[(Math.random() * pats.end.length) | 0] : pats.mid[(Math.random() * pats.mid.length) | 0];
+      let pos = b * stepsPerBar;
+      pat.forEach((len, k) => {
+        if (last && k === pat.length - 1) cur = endOn;
+        else {
+          const r = Math.random();
+          const mv = r < 0.38 ? -1 : r < 0.62 ? 1 : r < 0.74 ? -2 : r < 0.84 ? 2 : r < 0.92 ? 0 : 3;
+          cur = clamp(cur + mv, lo, hi);
+        }
+        out.push({ pos, len, n: cur }); pos += len;
+      });
+    }
+    return out;
+  },
+  gen() {
+    const m = this.mode;
+    if (m === 'yaravi') {
+      const pats = { mid: [[4, 2], [2, 2, 2], [3, 1, 2], [2, 1, 1, 2], [6]], end: [[6], [4, 2]] };
+      const A = this.melody(4, 6, pats, 4, 11, 9, 5), B = this.melody(4, 6, pats, 5, 12, 10, 5);
+      this.song = { spb: 6, dur: 0.42, bars: 16, mel: [...A, ...A.map(e => ({ ...e, pos: e.pos + 24 })), ...B.map(e => ({ ...e, pos: e.pos + 48 })), ...B.map(e => ({ ...e, pos: e.pos + 72 }))], chords: ['Am', 'Am', 'G', 'Am', 'Am', 'Dm', 'E', 'Am', 'C', 'G', 'Am', 'E', 'C', 'G', 'E', 'Am'] };
+    } else if (m === 'sanjuanito' || m === 'serenata' || m === 'dawn') {
+      const major = m === 'dawn';
+      const pats = { mid: [[2, 1, 1, 2, 2], [2, 2, 2, 2], [1, 1, 2, 1, 1, 2], [2, 1, 1, 4], [4, 2, 2]], end: [[2, 2, 4], [2, 6]] };
+      const A1 = this.melody(2, 8, pats, 5, 11, 8, 6, major);
+      const A = [...A1, ...this.melody(2, 8, pats, 5, 11, 8, 5, major).map(e => ({ ...e, pos: e.pos + 16 }))];
+      const B = this.melody(4, 8, pats, 6, 12, 10, 5, major);
+      this.song = { spb: 8, dur: m === 'dawn' ? 0.14 : 0.125, bars: 16, major, mel: [...A, ...A.map(e => ({ ...e, pos: e.pos + 32 })), ...B.map(e => ({ ...e, pos: e.pos + 64 })), ...B.map(e => ({ ...e, pos: e.pos + 96, rond: 1 }))], chords: major ? ['C', 'C', 'G', 'C', 'Am', 'G', 'C', 'C', 'F', 'C', 'G', 'C', 'Am', 'G', 'G', 'C'] : ['Am', 'Am', 'E', 'Am', 'Am', 'G', 'E', 'Am', 'C', 'G', 'Am', 'E', 'C', 'G', 'E', 'Am'] };
+    } else if (m === 'tension') {
+      this.song = { spb: 4, dur: 0.5, bars: 8, mel: [], chords: [] };
+      for (let b = 0; b < 8; b++) if (Math.random() < 0.6) this.song.mel.push({ pos: b * 4 + (Math.random() * 2 | 0), len: 3, n: [0, 1, 2, 3, 1][(Math.random() * 5) | 0] + 2 });
+    }
+  },
+  CH: { Am: [0, 3, 7], G: [-2, 2, 5], C: [3, 7, 10], E: [7, 11, 14], Dm: [5, 8, 12], F: [8, 12, 15] },
+  tick() {
+    if (!AU.ok || this.mode === 'off') return;
+    const c = AU.ctx;
+    if (!this.song) this.gen();
+    while (this.next < c.currentTime + 0.3) {
+      const s = this.song, t = this.next;
+      const total = s.spb * s.bars, p = this.step % total;
+      const bar = Math.floor(p / s.spb), inBar = p % s.spb;
+      for (const e of s.mel) if (e.pos === p) {
+        const f = this.noteF(e.n, s.major);
+        if (this.mode === 'tension') this.quena(t, f / 2, e.len * s.dur, 0.2);
+        else if (e.rond) this.rondador(t, f, this.noteF(e.n - 2, s.major) * (e.n % 5 === 0 ? 1 : 1), e.len * s.dur);
+        else this.quena(t, f, e.len * s.dur * 0.95, this.mode === 'yaravi' ? 0.2 : 0.17);
+      }
+      const ch = this.CH[s.chords[bar]];
+      if (this.mode === 'yaravi') {
+        if (inBar === 0) { this.bombo(t, 0.25); this.strum(t, ch, 0.06, -12); }
+        if (inBar === 2 || inBar === 4) this.pluck(t, 220 * Math.pow(2, ch[(inBar >> 1) % 3] / 12), 0.09);
+      } else if (this.mode === 'tension') {
+        if (inBar === 0) this.bombo(t, 0.4); if (inBar === 1) this.bombo(t, 0.22);
+        if (inBar === 2 && Math.random() < 0.3) this.rondador(t, 311, 330, 1.2);
+      } else if (s.spb === 8) {
+        if ([0, 2, 3, 4, 6, 7].includes(inBar)) this.bombo(t, inBar % 4 === 0 ? 0.45 : 0.18);
+        if (inBar === 2 || inBar === 6) this.strum(t, ch, 0.07, 0);
+        if (inBar === 0) this.pluck(t, 110 * Math.pow(2, ch[0] / 12), 0.14);
+        if (this.onBeat && inBar % 2 === 0) this.onBeat(t, p);
+      }
+      this.next += s.dur; this.step++;
+      if (this.step % total === 0) this.gen();
+    }
+  },
+  quena(t, f, dur, vol, bus) {
+    const c = AU.ctx; bus = bus || AU.mus;
+    const o = c.createOscillator(); o.type = 'triangle';
+    o.frequency.setValueAtTime(f * 0.97, t); o.frequency.linearRampToValueAtTime(f, t + 0.05);
+    const o2 = c.createOscillator(); o2.frequency.value = f * 2; const g2 = c.createGain(); g2.gain.value = 0.12;
+    const vib = c.createOscillator(); vib.frequency.value = 5.2; const vg = c.createGain();
+    vg.gain.setValueAtTime(0, t); vg.gain.linearRampToValueAtTime(f * 0.011, t + Math.min(0.4, dur * 0.7));
+    vib.connect(vg); vg.connect(o.frequency);
+    const br = AU.noiseSrc(t, dur + 0.2), bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = f * 1.5; bp.Q.value = 2.5;
+    const bg = c.createGain(); bg.gain.setValueAtTime(0.0001, t); bg.gain.linearRampToValueAtTime(vol * 0.35, t + 0.03); bg.gain.linearRampToValueAtTime(vol * 0.08, t + 0.12); bg.gain.linearRampToValueAtTime(0.0001, t + dur + 0.1);
+    const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 3200;
+    const g = c.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(vol, t + 0.06); g.gain.setValueAtTime(vol * 0.85, t + Math.max(0.07, dur - 0.05)); g.gain.linearRampToValueAtTime(0.0001, t + dur + 0.12);
+    o.connect(lp); o2.connect(g2); g2.connect(lp); lp.connect(g); br.connect(bp); bp.connect(bg); bg.connect(g);
+    AU.out(g, bus, 0.35);
+    o.start(t); o2.start(t); vib.start(t); const e = t + dur + 0.2; o.stop(e); o2.stop(e); vib.stop(e);
+  },
+  rondador(t, f1, f2, dur) {
+    const c = AU.ctx;
+    for (const f of [f1, f2]) {
+      const o = c.createOscillator(); o.frequency.value = f;
+      const g = c.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.09, t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + Math.max(0.2, dur) + 0.3);
+      o.connect(g); AU.out(g, AU.mus, 0.4); o.start(t); o.stop(t + dur + 0.4);
+    }
+    const s = AU.noiseSrc(t, 0.08), bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = f1 * 3; bp.Q.value = 4;
+    const g = c.createGain(); AU.env(g, t, 0.005, 0.06, 0.06); s.connect(bp); bp.connect(g); AU.out(g, AU.mus, 0.3);
+  },
+  bombo(t, v) {
+    const c = AU.ctx, o = c.createOscillator();
+    o.frequency.setValueAtTime(95, t); o.frequency.exponentialRampToValueAtTime(42, t + 0.14);
+    const g = c.createGain(); AU.env(g, t, 0.004, v * 0.8, 0.28); o.connect(g); AU.out(g, AU.mus, 0.15); o.start(t); o.stop(t + 0.35);
+    const s = AU.noiseSrc(t, 0.06), lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 400;
+    const g2 = c.createGain(); AU.env(g2, t, 0.002, v * 0.4, 0.05); s.connect(lp); lp.connect(g2); AU.out(g2, AU.mus, 0.1);
+  },
+  ksBuf(f) {
+    const key = Math.round(f); if (AU.ks.has(key)) return AU.ks.get(key);
+    const c = AU.ctx, sr = c.sampleRate, len = (sr * 1.4) | 0, b = c.createBuffer(1, len, sr), d = b.getChannelData(0);
+    const N = Math.max(2, Math.round(sr / f));
+    for (let i = 0; i < N; i++) d[i] = Math.random() * 2 - 1;
+    for (let i = N; i < len; i++) d[i] = 0.497 * (d[i - N] + d[i - N + 1 < i ? i - N + 1 : i - N]);
+    AU.ks.set(key, b); return b;
+  },
+  pluck(t, f, v) {
+    const c = AU.ctx, s = c.createBufferSource(); s.buffer = this.ksBuf(f);
+    const g = c.createGain(); g.gain.value = v; s.connect(g); AU.out(g, AU.mus, 0.25); s.start(t);
+  },
+  strum(t, ch, v, oct) {   // charango: rasgueo de 5 órdenes
+    const notes = [...ch, ch[0] + 12, ch[1] + 12];
+    notes.forEach((s, k) => this.pluck(t + k * 0.012, 440 * Math.pow(2, (s + oct) / 12), v));
+  }
+};
+setInterval(() => { try { MUSIC.tick(); } catch (e) { } }, 60);
+
+// ========================================================== DIÁLOGOS ===
+// Árbol de nodos: { w: quién, t: texto, c: [{t, g, if, fx}], n: siguiente, fx }
+// Caja retro con retrato, nombre y efecto de máquina de escribir.
+const WHO = {};
+function defWho(id, name, spr, col = C.oro) { WHO[id] = { name, spr, col }; }
+const DLG = { on: false, tree: null, node: null, pages: [], page: 0, chars: 0, choices: null, sel: 0, resolve: null, last: null, blipAcc: 0 };
+function talk(tree, start = 'start') {
+  return new Promise(res => {
+    DLG.on = true; DLG.tree = tree; DLG.resolve = res; DLG.last = null;
+    gotoNode(start);
+  });
+}
+function gotoNode(id) {
+  if (id === undefined || id === null || id === 'end') { endDialog(); return; }
+  const n = typeof id === 'object' ? id : DLG.tree[id];
+  if (!n) { endDialog(); return; }
+  DLG.node = n; DLG.last = id;
+  if (n.fx) n.fx();
+  const who = WHO[n.w] || null;
+  const tw = who ? 238 : 290;
+  const lines = wrapText(typeof n.t === 'function' ? n.t() : n.t, tw);
+  DLG.pages = []; for (let i = 0; i < lines.length; i += 4) DLG.pages.push(lines.slice(i, i + 4));
+  DLG.page = 0; DLG.chars = 0; DLG.sel = 0;
+  DLG.choices = n.c ? n.c.filter(ch => !ch.if || ch.if()) : null;
+}
+function endDialog() { DLG.on = false; const r = DLG.resolve; DLG.resolve = null; if (r) r(DLG.last); }
+function pageLen() { return DLG.pages[DLG.page].join(' ').length; }
+function updateDialog(dt) {
+  if (!DLG.on) return;
+  const full = pageLen();
+  if (DLG.chars < full) {
+    const before = DLG.chars | 0;
+    DLG.chars = Math.min(full, DLG.chars + dt * 52);
+    if ((DLG.chars | 0) !== before && ((DLG.chars | 0) % 2 === 0)) AU.blip(WHO[DLG.node.w] ? 560 + (DLG.node.w.charCodeAt(0) % 7) * 40 : 500);
+  }
+  const done = DLG.chars >= full;
+  const lastPage = DLG.page >= DLG.pages.length - 1;
+  const confirm = jp('KeyE', 'Space', 'Enter', 'NumpadEnter');
+  let click = CLICK;
+  if (done && lastPage && DLG.choices && DLG.choices.length) {
+    if (jp('ArrowUp', 'KeyW')) { DLG.sel = (DLG.sel + DLG.choices.length - 1) % DLG.choices.length; AU.blip(900); }
+    if (jp('ArrowDown', 'KeyS')) { DLG.sel = (DLG.sel + 1) % DLG.choices.length; AU.blip(900); }
+    for (let k = 0; k < DLG.choices.length; k++) if (jp('Digit' + (k + 1), 'Numpad' + (k + 1))) { DLG.sel = k; choose(); return; }
+    if (click) {
+      const k = choiceHit(click); if (k >= 0) { DLG.sel = k; choose(); return; }
+    }
+    if (confirm) choose();
+    return;
+  }
+  if (confirm || click) {
+    if (!done) DLG.chars = full;
+    else if (!lastPage) { DLG.page++; DLG.chars = 0; }
+    else gotoNode(DLG.node.n);
+  }
+}
+function choose() {
+  const ch = DLG.choices[DLG.sel];
+  AU.blip(1000);
+  if (ch.fx) ch.fx();
+  gotoNode(ch.g);
+}
+function choiceLayout() {
+  const n = DLG.choices.length, h = n * 11 + 8, y = 124 - h - 4;
+  return { x: 40, y, w: 272, h };
+}
+function choiceHit(p) {
+  const L = choiceLayout();
+  if (p.x < L.x || p.x > L.x + L.w) return -1;
+  const k = Math.floor((p.y - L.y - 4) / 11);
+  return k >= 0 && k < DLG.choices.length ? k : -1;
+}
+function drawDialog(t) {
+  if (!DLG.on) return;
+  const who = WHO[DLG.node.w] || null;
+  const bx = 4, by = 128, bw = 312, bh = 68;
+  frameBox(bx, by, bw, bh, C.noche1, C.ocre, C.madera0);
+  rectDither(bx + 3, by + 3, bw - 6, bh - 6, C.noche2, 0.25);
+  let tx = bx + 10;
+  if (who) {
+    frameBox(bx + 6, by + 8, 40, 44, C.noche0, C.oro, C.madera1);
+    const img = who.spr[0];
+    const sc = img.w <= 24 ? 1.5 : 1;
+    blit8(img, bx + 6 + 20 - (img.w * sc) / 2, by + 11 + (img.h > 40 ? 0 : 4), sc, false);
+    rectFill(bx + 6, by + 51, 40, 12, C.noche1);
+    drawTextC(who.name.split(' ')[0], bx + 26, by + 52, who.col, C.noche0);
+    tx = bx + 54;
+    drawText(who.name, tx, by + 5, who.col, C.noche0);
+  }
+  let left = DLG.chars | 0, y = by + (who ? 17 : 9);
+  for (const line of DLG.pages[DLG.page]) {
+    const part = line.slice(0, Math.max(0, left)); left -= line.length + 1;
+    drawText(part, tx, y, C.cal, C.noche0); y += 11;
+  }
+  const done = DLG.chars >= pageLen(), lastPage = DLG.page >= DLG.pages.length - 1;
+  if (done && lastPage && DLG.choices && DLG.choices.length) {
+    const L = choiceLayout();
+    frameBox(L.x, L.y, L.w, L.h, C.noche1, C.oro, C.madera0);
+    DLG.choices.forEach((ch, k) => {
+      const sel = k === DLG.sel;
+      if (sel) rectFill(L.x + 3, L.y + 4 + k * 11, L.w - 6, 10, C.noche3);
+      drawText((k + 1) + '. ' + ch.t, L.x + 8, L.y + 4 + k * 11, sel ? C.oro2 : C.cal2, C.noche0);
+      if (sel && ((t * 3) | 0) % 2) drawText('>', L.x + 3, L.y + 4 + k * 11, C.oro);
+    });
+  } else if (done && ((t * 2.5) | 0) % 2) {
+    rectFill(bx + bw - 14, by + bh - 10, 5, 1, C.oro); rectFill(bx + bw - 13, by + bh - 9, 3, 1, C.oro); rectFill(bx + bw - 12, by + bh - 8, 1, 1, C.oro);
+  }
+}
+
+// ============================================================== UI ====
+const TOASTS = [];
+function toast(txt, col = C.oro2) { TOASTS.push({ txt, t: 3.2, col }); if (TOASTS.length > 3) TOASTS.shift(); }
+function drawParchment(x, y, w, h) {
+  for (let j = y; j < y + h; j++) for (let i = x; i < x + w; i++) {
+    const n = fbm(i / 18, j / 18, 3), b = BAYER[(j & 3) * 4 + (i & 3)];
+    const c = n + b * 0.12 > 0.62 ? C.ocre : n + b * 0.1 > 0.4 ? C.cal2 : C.cal;
+    buf[j * W + i] = PAL32[c];
+  }
+  for (let i = x; i < x + w; i++) { buf[y * W + i] = PAL32[C.madera1]; buf[(y + h - 1) * W + i] = PAL32[C.madera1]; }
+  for (let j = y; j < y + h; j++) { buf[j * W + x] = PAL32[C.madera1]; buf[j * W + x + w - 1] = PAL32[C.madera1]; }
+  rectDither(x, y, w, 4, C.madera2, 0.5); rectDither(x, y + h - 4, w, 4, C.madera2, 0.5);
+}
+let PARCH_CACHE = null;
+function parchmentBG() {
+  if (!PARCH_CACHE) { drawParchment(0, 0, W, H); PARCH_CACHE = buf.slice(); }
+  else buf.set(PARCH_CACHE);
+}
+function drawMapScreen(t) {
+  parchmentBG();
+  const S = 3, ox = 3, oy = 8;
+  drawText('Plano de San Francisco de Quito', 6, -1, C.madera0);
+  for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) {
+    const i = ci(x, y), k = KIND[i];
+    let c = -1;
+    if (k === K_BLD) c = (STY[i] === S_CASA || STY[i] === S_RONDA) ? C.ocre : STY[i] === S_ROCA ? C.monte1 : C.madera2;
+    else if (k === K_VOID) c = C.monte1;
+    else if (k === K_LOW) c = C.piedra2;
+    if (c < 0) continue;
+    for (let yy = 0; yy < S; yy++) for (let xx = 0; xx < S; xx++) {
+      if (k === K_BLD && STY[i] !== S_CASA && STY[i] !== S_RONDA && ((xx + yy + x + y) & 1)) continue;
+      putp(ox + x * S + xx, oy + y * S + yy, PAL32[c]);
+    }
+  }
+  // iglesias
+  for (const [x, y] of [[48, 19], [36, 19], [18, 30], [77, 40], [6, 49], [47, 29], [36, 39]]) {
+    rectFill(ox + x * S, oy + y * S - 4, 1, 7, C.madera0); rectFill(ox + x * S - 2, oy + y * S - 2, 5, 1, C.madera0);
+  }
+  // misiones
+  MISSIONS.forEach((m, k) => {
+    const [x, y] = m.pos, blink = ((t * 3) | 0) % 2;
+    const px = ox + x * S, py = oy + y * S;
+    if (m.done) { drawText('*', px - 2, py - 5, C.oro, C.madera0); }
+    else { rectFill(px - 4, py - 4, 9, 9, blink ? C.rojo1 : C.rojo0); drawText(String(k + 1), px - 1, py - 5, C.cal); }
+  });
+  // jugador
+  const ppx = ox + P.x * S, ppy = oy + P.y * S;
+  for (let r = 0; r < 6; r++) {
+    const a1 = P.a + 2.5, a2 = P.a - 2.5;
+    putp((ppx + Math.cos(P.a) * r) | 0, (ppy + Math.sin(P.a) * r) | 0, PAL32[C.azul0]);
+    putp((ppx + Math.cos(a1) * r * 0.6) | 0, (ppy + Math.sin(a1) * r * 0.6) | 0, PAL32[C.azul0]);
+    putp((ppx + Math.cos(a2) * r * 0.6) | 0, (ppy + Math.sin(a2) * r * 0.6) | 0, PAL32[C.azul0]);
+  }
+  rectFill(ppx - 1, ppy - 1, 3, 3, C.azul1);
+  // leyenda
+  const lx = 258;
+  rectFill(lx - 3, 8, 64, 188, C.cal2);
+  drawText('Leyendas', lx, 8, C.madera0);
+  MISSIONS.forEach((m, k) => {
+    const y = 22 + k * 20;
+    drawText((m.done ? '*' : String(k + 1)), lx, y, m.done ? C.ocre : C.rojo0);
+    drawText(m.tag, lx + 8, y, m.done ? C.ocre : C.madera0);
+    drawText(m.place, lx + 8, y + 9, C.madera1);
+  });
+  drawText('Tú:', lx, 126, C.madera0); rectFill(lx + 18, 131, 3, 3, C.azul1);
+  wrapText(ZONES[ZONE[ci(P.x | 0, P.y | 0)]] || '', 58).forEach((l, j) => drawText(l, lx, 138 + j * 9, C.madera1));
+  for (const [txt, x, y] of [['Plaza Grande', 47.5, 9.5], ['San Francisco', 27, 34.5], ['La Ronda', 53, 49.5], ['San Diego', 6, 52], ['Sto. Domingo', 68, 40], ['Siete Cruces', 42.8, 33]]) {
+    const w = textWidth(txt), px = ox + x * S - w / 2, py = oy + y * S - 5;
+    rectDither(px - 1, py + 1, w + 2, 9, C.cal, 0.6); drawText(txt, px, py, C.madera0);
+  }
+  drawText('M: cerrar', lx, 184, C.madera1);
+  drawText('N', ox + 4, oy + 2, C.madera0); rectFill(ox + 6, oy + 12, 1, 6, C.madera0);
+}
+function drawJournal(t) {
+  parchmentBG();
+  drawTextC('Diario del Sereno', W / 2, 2, C.madera0, -1, 2);
+  let y = 26;
+  MISSIONS.forEach((m, k) => {
+    const st = m.done ? 'Cumplida' : m.state > 0 ? 'En curso' : 'Sin empezar';
+    drawText((k + 1) + '. ' + m.name, 10, y, m.done ? C.ocre : C.madera0);
+    drawText(st, W - 10 - textWidth(st), y, m.done ? C.verde0 : m.state > 0 ? C.rojo0 : C.madera1);
+    if (m.done) rectFill(10, y + 6, textWidth((k + 1) + '. ' + m.name), 1, C.ocre);
+    const lines = wrapText(m.hint(), 290);
+    lines.slice(0, 2).forEach((l, j) => drawText(l, 18, y + 10 + j * 9, C.madera1));
+    y += 12 + Math.min(2, lines.length) * 9 + 3;
+  });
+  drawText('Alforja:', 10, 180, C.madera0);
+  let ix = 52;
+  for (const it of INV) { blit8(SPR['ic_' + it], ix, 178); ix += 18; }
+  if (!INV.size) drawText('vacía', 52, 180, C.madera1);
+  drawText('J: cerrar', W - 50, 190, C.madera1);
+}
+function drawHUD(t) {
+  // zona actual
+  if (HUD.zoneT > 0) {
+    const a = Math.min(1, HUD.zoneT);
+    const txt = HUD.zone;
+    if (a > 0.3) { rectDither(4, 4, textWidth(txt) + 8, 12, C.noche0, 0.6); drawText(txt, 8, 4, C.oro2, C.noche0); }
+  }
+  // temporizadores de misión
+  let ry = 4;
+  for (const tm of TIMERS_HUD) {
+    const txt = tm.text(); const w = textWidth(txt) + 10;
+    rectDither(W - w - 4, ry, w, 12, C.noche0, 0.7); drawText(txt, W - w + 1, ry, tm.col || C.oro2, C.noche0);
+    if (tm.frac !== undefined) { const f = tm.frac(); rectFill(W - w - 4, ry + 12, w, 2, C.noche1); rectFill(W - w - 4, ry + 12, w * f, 2, tm.col || C.oro); }
+    ry += 16;
+  }
+  // mensajes
+  let ty = 150;
+  for (let i = TOASTS.length - 1; i >= 0; i--) {
+    const m = TOASTS[i]; if (m.t <= 0) continue;
+    if (m.t > 0.4 || ((m.t * 10) | 0) % 2) { const w = textWidth(m.txt) + 10; rectDither(W / 2 - w / 2, ty, w, 12, C.noche0, 0.75); drawTextC(m.txt, W / 2, ty, m.col, C.noche0); }
+    ty -= 14;
+  }
+  // indicación de interacción
+  if (HUD.prompt && !DLG.on) {
+    const txt = (IS_TOUCH ? '[E] ' : '[E] ') + HUD.prompt; const w = textWidth(txt) + 10;
+    rectDither(W / 2 - w / 2, 166, w, 12, C.noche0, 0.8); drawTextC(txt, W / 2, 166, C.cal, C.noche0);
+  }
+  if (P.hidden && STATE === 'PLAY') { drawText('(escondido)', 6, H - 12, C.niebla2, C.noche0); }
+}
+const HUD = { zone: '', zoneT: 0, prompt: '' };
+const TIMERS_HUD = [];
+
+// Menú genérico (título / pausa)
+function drawMenu(items, sel, x, y, t, col = C.cal2) {
+  items.forEach((it, k) => {
+    const s = k === sel, yy = y + k * 13;
+    if (s) { const w = textWidth(it) + 16; rectDither(x - w / 2, yy - 1, w, 12, C.noche3, 0.7); }
+    drawTextC(it, x, yy, s ? C.oro2 : col, C.noche0);
+    if (s && ((t * 3) | 0) % 2) { drawText('>', x - textWidth(it) / 2 - 10, yy, C.oro); drawText('<', x + textWidth(it) / 2 + 5, yy, C.oro); }
+  });
+}
+function menuInput(n, sel, x, y) {
+  if (jp('ArrowUp', 'KeyW')) { sel = (sel + n - 1) % n; AU.blip(900); }
+  if (jp('ArrowDown', 'KeyS')) { sel = (sel + 1) % n; AU.blip(900); }
+  let go = jp('Enter', 'KeyE', 'Space', 'NumpadEnter');
+  if (CLICK) { const k = Math.floor((CLICK.y - y + 1) / 13); if (k >= 0 && k < n && Math.abs(CLICK.x - x) < 80) { sel = k; go = true; } }
+  return { sel, go };
+}
+
+// ========================================================= ENTIDADES ===
+let STATE = 'TITLE', T = 0, CUTSCENE = 0;
+const P = { x: 47.5, y: 12.2, a: -Math.PI / 2, pitch: 0, z: 0, bob: 0, stepAcc: 0, hidden: false, trail: [], moving: false };
+const INV = new Set();
+const FLAGS = {};
+const ENTS = [];
+function ent(o) {
+  const e = Object.assign({ x: 0, y: 0, z: 0, w: 0.36, h: 0.54, spr: null, anim: 0, solid: true, r: 0.2, name: '', talk: null, prompt: null, face: 0, moving: false, show: () => true, flip: false }, o);
+  ENTS.push(e); return e;
+}
+const floorAt = (x, y) => inMap(x | 0, y | 0) ? HFL[ci(x | 0, y | 0)] : 0;
+const walkableCell = (x, y) => { if (!inMap(x, y)) return false; const k = KIND[ci(x, y)]; return k === K_OPEN || k === K_ZAG; };
+const inZag = (x, y) => inMap(x | 0, y | 0) && KIND[ci(x | 0, y | 0)] === K_ZAG;
+function canStand(x, y, fromH, r = 0.2) {
+  for (const [dx, dy] of [[-r, -r], [r, -r], [-r, r], [r, r]]) {
+    const cx = Math.floor(x + dx), cy = Math.floor(y + dy);
+    if (!walkableCell(cx, cy)) return false;
+    if (HFL[ci(cx, cy)] - fromH > 0.27) return false;
+  }
+  return true;
+}
+function moveBody(b, dx, dy, r = 0.2) {
+  const h = floorAt(b.x, b.y);
+  if (canStand(b.x + dx, b.y, h, r)) b.x += dx;
+  if (canStand(b.x, b.y + dy, h, r)) b.y += dy;
+}
+function moveToward(e, tx, ty, speed, dt) {
+  const dx = tx - e.x, dy = ty - e.y, d = Math.hypot(dx, dy);
+  if (d < 0.05) { e.moving = false; return true; }
+  const s = Math.min(d, speed * dt);
+  e.x += dx / d * s; e.y += dy / d * s; e.face = Math.atan2(dy, dx); e.moving = true; e.anim += dt * speed;
+  return d < 0.12;
+}
+function losWalk(x0, y0, x1, y1) {
+  const d = Math.hypot(x1 - x0, y1 - y0), n = Math.ceil(d / 0.2);
+  for (let k = 1; k < n; k++) {
+    const t = k / n, cx = (x0 + (x1 - x0) * t) | 0, cy = (y0 + (y1 - y0) * t) | 0;
+    const kk = KIND[ci(cx, cy)]; if (kk === K_BLD || kk === K_LOW) return false;
+  }
+  return true;
+}
+function patrol(e, dt) {
+  const p = e.path, tgt = p[e.wi];
+  if (moveToward(e, tgt[0], tgt[1], e.speed, dt)) {
+    if (e.pingpong) { if (e.wi + e.dirStep >= p.length || e.wi + e.dirStep < 0) e.dirStep *= -1; e.wi += e.dirStep; }
+    else e.wi = (e.wi + 1) % p.length;
+  }
+  e.lookFace = e.face + Math.sin(T * 1.3 + e.x) * 0.25;
+}
+function sees(g, tx, ty) {
+  if (inZag(tx, ty)) return false;
+  const dx = tx - g.x, dy = ty - g.y, d = Math.hypot(dx, dy);
+  if (d > g.range) return false;
+  if (d < 0.8) return true;
+  if (Math.abs(angDiff(Math.atan2(dy, dx), g.lookFace ?? g.face)) > g.fov / 2) return false;
+  return losWalk(g.x, g.y, tx, ty);
+}
+function guard(o) { return ent(Object.assign({ wi: 0, dirStep: 1, speed: 1, fov: 1.25, range: 4, pingpong: false, solid: false }, o)); }
+function follower(e, dt, wobble = 0, maxSpeed = 2.6) {
+  let tgt = null;
+  for (let i = P.trail.length - 1; i >= 0; i--) { const t = P.trail[i]; if (Math.hypot(t[0] - P.x, t[1] - P.y) >= 1.0) { tgt = t; break; } }
+  if (!tgt) { e.moving = false; return; }
+  if (Math.hypot(tgt[0] - e.x, tgt[1] - e.y) > 7) { e.x = tgt[0]; e.y = tgt[1]; }
+  const wx = wobble ? Math.sin(T * 2.1) * wobble : 0, wy = wobble ? Math.cos(T * 1.7) * wobble : 0;
+  moveToward(e, tgt[0] + wx, tgt[1] + wy, maxSpeed, dt);
+  if (!walkableCell(e.x | 0, e.y | 0)) { e.x = tgt[0]; e.y = tgt[1]; }
+}
+
+// ---------------------------------------------------- utilidades async
+const WAITS = [];
+function wait(s) { return new Promise(r => WAITS.push({ t: s, r })); }
+const FADE = { v: 0, target: 0, speed: 1.6, col: C.negro, res: null };
+function fadeTo(v, speed = 1.6, col = C.negro) { FADE.target = v; FADE.speed = speed; FADE.col = col; return new Promise(r => { FADE.res = r; }); }
+let FLASH = 0, FLASH_COL = C.rojo1, SHAKE = 0;
+async function narr(text) { await talk({ start: { w: null, t: text } }); }
+function say(w, t) { return talk({ start: { w, t } }); }
+
+// ==================================================== MISIONES / NPCs ===
+const MISSIONS = [];
+function mission(o) { const m = Object.assign({ state: 0, done: false, hint: () => '', update() { }, reset() { } }, o); MISSIONS.push(m); return m; }
+function complete(m, msg) {
+  m.done = true; m.state = 99; AU.fanfare();
+  toast('Leyenda cumplida: ' + m.name, C.oro2);
+  saveGame();
+  if (MISSIONS.every(mm => mm.done)) setTimeout(() => finale(), 2500);
+}
+function giveItem(it, label) { INV.add(it); AU.chime(); toast('Recibiste: ' + label); }
+function takeItem(it) { INV.delete(it); }
+
+function setupEntities() {
+  defWho('cantuna', 'Cantuña', SPR.cantuna); defWho('diablo', 'El Diablo', SPR.diablo, C.naranja);
+  defWho('chulla', 'El Chulla', SPR.chulla); defWho('rosario', 'Doña Rosario', SPR.rosario); defWho('lucho', 'Don Lucho, sastre', SPR.lucho);
+  defWho('efrain', 'Don Efraín', SPR.efrain); defWho('dama', 'Mariquita', SPR.dama, C.rosa);
+  defWho('almeida', 'Padre Almeida', SPR.almeida); defWho('fraile', 'Fray Celador', SPR.fraile); defWho('portero', 'Fray Portero', SPR.portero);
+  defWho('cristo', 'El Cristo', SPR.cristo, C.oro2);
+  defWho('ramon', 'Don Ramón Ayala', SPR.ramon); defWho('gallo', 'El Gallo', SPR.gallo, C.oro2); defWho('alguacil', 'Alguacil', SPR.alguacil);
+  defWho('mariana', 'Doña Mariana', SPR.mariana);
+  defWho('tapada', 'La Dama Tapada', SPR.tapada, C.lavanda); defWho('gerardo', 'Don Gerardo', SPR.sereno); defWho('beata', 'Doña Carmelita', SPR.beata);
+
+  // ---------------------------------------------------- 1. CANTUÑA
+  const M1 = mission({
+    id: 'cantuna', tag: 'Cantuña', place: 'Atrio S. Fco.', name: 'Cantuña y el atrio', short: 'Cantuña, atrio de San Francisco', pos: [23, 29.5], bells: 0, bellT: 0, grace: 0,
+    hint() {
+      if (this.done) return 'El Diablo se fue chiro: al atrio le falta una piedra.';
+      if (this.state === 0) return 'Habla con Cantuña en el atrio de San Francisco.';
+      if (!INV.has('piedra')) return 'Busca la última piedra en el Callejón del Cantero (bajando por la calle Bolívar). ¡Antes de la campanada doce!';
+      return 'Esconde la piedra en el hueco bajo las gradas del atrio. ¡Ojo con los diablillos!';
+    }
+  });
+  const cant = ent({ x: 23.3, y: 29.6, spr: SPR.cantuna, name: 'Cantuña', face: 0 });
+  const diablo = ent({ x: 24.6, y: 29.6, spr: SPR.diablo, name: 'El Diablo', w: 0.44, h: 0.72, show: () => FLAGS.diablo, light: 0.9 });
+  const piedra = ent({ x: 27.6, y: 41.3, spr: SPR.piedra, w: 0.22, h: 0.16, solid: false, name: 'la piedra', prompt: 'Coger la última piedra', show: () => M1.state === 1 && !INV.has('piedra'), glow: { r: 0.2, y: 0.5, a: 0.4, c: C.oro } });
+  const hueco = ent({ x: 25.7, y: 30.0, spr: null, solid: false, prompt: 'Esconder la piedra bajo las gradas', show: () => M1.state === 1 && INV.has('piedra') });
+  const humo = ent({ x: 24.6, y: 29.6, spr: SPR.humo, w: 0.6, h: 0.6, solid: false, show: () => FLAGS.humo > 0, z: 0.1 });
+  const imps = [
+    [[26.5, 27], [30.5, 27], [30.5, 32.6], [26.5, 32.6]], [[29, 26.6], [29, 33.4]], [[24.5, 34.6], [33, 34.6]],
+    [[24.5, 24.6], [33, 24.6]], [[27.5, 35.5], [27.5, 38.5]]
+  ].map((path, k) => guard({ x: path[0][0], y: path[0][1], path, pingpong: k > 0, speed: 1.1 + k * 0.1, spr: SPR.diablillo, w: 0.3, h: 0.34, fov: 1.3, range: 3.4, show: () => M1.state === 1, light: 0.8, redLight: 1 }));
+  cant.talk = async () => {
+    if (M1.done) return say('cantuna', '¡Dios le pague, taita sereno! Cada vez que pase por el atrio, acuérdese: falta una piedra, y por esa piedra sigo vivito.');
+    if (M1.state === 1) return say('cantuna', INV.has('piedra') ? '¡Ahí está la piedra! Escóndala bajo las gradas del atrio, rapidito, que ya mismo son las doce.' : '¡Apúrese, taita! Bajando por la Bolívar está el Callejón del Cantero. ¡Las campanas no esperan!');
+    await talk({
+      start: { w: 'cantuna', t: '¡Ay, taita sereno, qué bueno que asoma! Achachay, qué frío que hace... Venga nomás, que le cuento mi desgracia.', n: 's2' },
+      s2: { w: 'cantuna', t: 'Me comprometí a terminar el atrio de San Francisco en una sola noche. Como no avanzaba, le vendí el alma al Diablo. Él y sus diablillos acabaron todito... ¡pero a las doce campanadas viene a cobrarme!', c: [{ t: '¿Y qué quiere que haga, pues?', g: 's3' }, { t: '¡Chuta! Eso le pasa por negociante.', g: 's2b' }] },
+      s2b: { w: 'cantuna', t: 'Ya sé, ya sé, taitito. Pero no me deje solito, ¿ya? Que ya mismo se me va el alma.', n: 's3' },
+      s3: { w: 'cantuna', t: 'El trato dice que el Diablo se lleva mi alma si el atrio está completito. Pero yo, de vivo, escondí una piedra en el Callejón del Cantero, bajando por la calle Bolívar.', n: 's4' },
+      s4: { w: 'cantuna', t: 'Dame trayendo esa piedra y escóndela en el hueco bajo las gradas del atrio, antes de la campanada doce. ¡Cuidado con los diablillos, que andan rondando la plaza!', c: [{ t: '¡De ley le ayudo! Ahorita mismo voy.', g: 'go', fx: () => startM1() }, { t: 'Deme un ratito para pensarlo.', g: 'later' }] },
+      go: { w: 'cantuna', t: '¡Dios le pague! Vaya nomás, que ya empiezan a sonar las campanas de San Francisco...' },
+      later: { w: 'cantuna', t: 'Ya, pero no se demore mucho, que el Diablo no espera a nadies.' }
+    });
+  };
+  function startM1() {
+    M1.state = 1; M1.bells = 0; M1.bellT = 1.5; MUSIC.set('tension');
+    TIMERS_HUD.push(M1.tm = { text: () => 'Campanada ' + M1.bells + ' de 12', frac: () => M1.bells / 12, col: C.naranja });
+  }
+  function endM1Timer() { const i = TIMERS_HUD.indexOf(M1.tm); if (i >= 0) TIMERS_HUD.splice(i, 1); MUSIC.set('yaravi'); }
+  piedra.talk = () => { giveItem('piedra', 'la última piedra del atrio'); };
+  hueco.talk = async () => {
+    CUTSCENE++; takeItem('piedra'); M1.state = 2; endM1Timer();
+    await narr('Metes la piedra en el hueco oscuro bajo las gradas y la tapas con tierra. Justo entonces...');
+    AU.bell(147, 0.7); await wait(0.6);
+    await fadeTo(1, 3); FLAGS.diablo = 1; P.x = 25.4; P.y = 31.2; P.a = -2.3; await fadeTo(0, 2);
+    AU.laugh();
+    await talk({
+      a: { w: 'diablo', t: '¡Jajay! Doce campanadas, Cantuña. El atrio está listo y tu alma es mía.', n: 'b' },
+      b: { w: 'cantuna', t: 'Cuente primero las piedras, patroncito. El trato era el atrio completito, ¿no es cierto?', n: 'c' },
+      c: { w: 'diablo', t: 'Una, dos, mil, diez mil... ¿Qué fue? ¡¿Qué fue?! ¡Falta una piedra! ¡¿Quién me hizo esta trampa?!', n: 'd' },
+      d: { w: 'cantuna', t: 'Será pues que el atrio no está terminado, su merced. Trato es trato.', n: 'e' },
+      e: { w: 'diablo', t: '¡Chuta! ¡Me voy chiro, sin alma ni nada! ¡Ya me las pagarán, quiteños!' }
+    }, 'a');
+    FLAGS.humo = 1; AU.whoosh(); AU.laugh(); SHAKE = 0.6;
+    for (let f = 0; f < 3; f++) { humo.frameOverride = f; await wait(0.35); }
+    FLAGS.diablo = 0; FLAGS.humo = 0;
+    await say('cantuna', '¡Se fue chiro el Diablo! Por eso dicen que al atrio de San Francisco le falta una piedra. ¡Dios le pague, taita sereno, de ley que sí!');
+    CUTSCENE--; complete(M1);
+  };
+  M1.fail = async () => {
+    CUTSCENE++; endM1Timer(); M1.state = 0; takeItem('piedra');
+    await fadeTo(1, 3); FLAGS.diablo = 1; P.x = 25.4; P.y = 31.2; P.a = -2.3; await fadeTo(0, 2); AU.laugh();
+    await talk({
+      a: { w: 'diablo', t: '¡Doce campanadas! El atrio está completito y el alma de Cantuña es... un momentito, ¿y la escritura del trato? ¡Chuta, la dejé en el infierno!', n: 'b' },
+      b: { w: 'diablo', t: '¡Ya vuelvo, Cantuña! ¡Y esta vez cuento piedra por piedra!', n: 'c' },
+      c: { w: 'cantuna', t: '¡Uf, de chiripa! Taita sereno, tenemos otra oportunidad. Háblame cuando esté listo y volvemos a intentar.' }
+    }, 'a');
+    FLAGS.diablo = 0; CUTSCENE--;
+  };
+  M1.update = (dt) => {
+    if (M1.state !== 1 || CUTSCENE) return;
+    M1.bellT -= dt;
+    if (M1.bellT <= 0) { M1.bellT = 11; M1.bells++; AU.bell(147, 0.6, -0.3); if (M1.bells >= 12) { M1.fail(); return; } }
+    M1.grace -= dt;
+    for (const g of imps) if (M1.grace <= 0 && sees(g, P.x, P.y)) {
+      M1.grace = 2.5; AU.laugh(); FLASH = 0.5; FLASH_COL = C.rojo1; toast('¡Un diablillo te vio! Te arrastró fuera de la plaza.', C.naranja);
+      P.x = 31.5; P.y = 24.8; P.a = Math.PI * 0.75;
+    }
+  };
+
+  // ---------------------------------------------------- 2. EL CHULLA
+  const RX = (x, side) => x + 0.5 + 0, RY = (x, side) => rondaY(x) + (side ? 1.72 : 0.3);
+  const M2 = mission({
+    id: 'chulla', tag: 'El Chulla', place: 'La Ronda', name: 'El Chulla quiteño', short: 'El Chulla, en La Ronda', pos: [45, 51], charm: 0,
+    hint() {
+      if (this.done) return 'La Mariquita le tiró una rosa al Chulla. ¡Qué elegancia!';
+      if (this.state === 0) return 'Busca al Chulla en La Ronda.';
+      if (this.state === 1) { const f = ['sombrero', 'leva', 'baston'].filter(i => !INV.has(i)); return f.length ? 'Consigue con los vecinos de La Ronda: ' + f.map(i => i === 'baston' ? 'bastón' : i).join(', ') + '. Empieza por Doña Rosario.' : 'Lleva sombrero, leva y bastón al Chulla.'; }
+      return 'Acompaña al Chulla bajo el balcón azul de la Mariquita (La Ronda) y ayúdale con el piropo y la serenata.';
+    }
+  });
+  const chulla = ent({ x: 44.6, y: RY(44, 0) + 0.2, spr: SPR.chulla, name: 'El Chulla' });
+  const rosario = ent({ x: 49.5, y: RY(49, 1), spr: SPR.rosario, name: 'Doña Rosario' });
+  const lucho = ent({ x: 54.5, y: RY(54, 1), spr: SPR.lucho, name: 'Don Lucho' });
+  const efrain = ent({ x: 60.5, y: RY(60, 1), spr: SPR.efrain, name: 'Don Efraín' });
+  const dama = ent({ x: 57.5, y: rondaY(57) + 0.1, z: 1.02, spr: SPR.dama, w: 0.46, h: 0.52, solid: false, name: 'la Mariquita', show: () => M2.state >= 2 });
+  const balcon = ent({ x: 57.5, y: rondaY(57) + 0.9, spr: null, solid: false, prompt: 'Llamar a la Mariquita', show: () => (M2.state === 2 || M2.state === 3) && Math.hypot(chulla.x - 57.5, chulla.y - (rondaY(57) + 1)) < 2 });
+  chulla.talk = async () => {
+    if (M2.done) return say('chulla', '¡Amigo sereno! Mañana devuelvo todo... bueno, casi todo. ¡Qué viva Quito y sus chullas!');
+    if (M2.state === 0) return talk({
+      start: { w: 'chulla', t: '¿Qué fue, amigo sereno? Aquí, el Chulla quiteño, para servirle. Elegante de nacimiento... pero chiro de profesión.', n: 's2' },
+      s2: { w: 'chulla', t: 'Esta noche quiero darle serenata a la Mariquita, la del balcón azul de La Ronda. Pero mire, pues: sin sombrero, sin leva y sin bastón, ¿quién me va a hacer caso?', c: [{ t: '¿Y cómo le ayudo, pues?', g: 's3' }, { t: 'Mejor búsquese un trabajito, mijo.', g: 's2b' }] },
+      s2b: { w: 'chulla', t: '¡Ay, no sea malito! Trabajar es para los que no tienen estilo. Ya, ya... pero ayúdeme, ¿sí?', n: 's3' },
+      s3: { w: 'chulla', t: 'Los vecinos de La Ronda algo han de tener. Doña Rosario, la de los canelazos, siempre sabe quién tiene qué. Dame consiguiendo sombrero, leva y bastón, y le debo una eterna.', c: [{ t: 'De ley, Chulla. Ahorita vengo.', g: 'end', fx: () => { M2.state = 1; } }, { t: 'Otro ratito.', g: 'end' }] }
+    });
+    if (M2.state === 1) {
+      if (INV.has('sombrero') && INV.has('leva') && INV.has('baston')) {
+        await talk({
+          start: { w: 'chulla', t: '¡Achachay, qué pinta! Sombrero de copa, leva y bastón... ¡Ahora sí soy el chulla más elegante de todo Quito!', n: 'p0', fx: () => { ['sombrero', 'leva', 'baston'].forEach(takeItem); } },
+          p0: { w: 'chulla', t: 'Pero, amigo... cuando la tengo enfrente me pongo nervioso. Ayúdeme a escoger los piropos, ¿sí? Vamos bajo el balcón azul, un poquito más abajo.' }
+        });
+        await fadeTo(1, 3); chulla.spr = SPR.chulla2; defWho('chulla', 'El Chulla', SPR.chulla2); M2.state = 2;
+        chulla.x = 56.8; chulla.y = rondaY(57) + 1.2; await fadeTo(0, 3); AU.chime();
+        return;
+      }
+      const f = ['sombrero', 'leva', 'baston'].filter(i => !INV.has(i)).map(i => i === 'baston' ? 'el bastón' : i === 'leva' ? 'la leva' : 'el sombrero');
+      return say('chulla', '¿Qué fue? ¿Ya consiguió algo? Todavía me falta ' + f.join(', ') + '. Pregúntele a Doña Rosario, la del canelazo.');
+    }
+    return say('chulla', 'Llame a la Mariquita, amigo. Yo me arreglo la leva... ¿cómo me veo? ¿Elegante, no?');
+  };
+  rosario.talk = async () => {
+    if (M2.state === 0 || M2.done) return say('rosario', '¡Buenas noches, joven! ¿Un canelacito pa\'l frío? Achachay, esta neblina se mete hasta los huesos.');
+    if (INV.has('rebozo')) {
+      await say('rosario', '¡Mi rebozo azul! Dios le pague, mijo. Tome el bastón de mi finadito, que en paz descanse. Era bien chullita también, ¿sabe?');
+      takeItem('rebozo'); giveItem('baston', 'el bastón'); FLAGS.baston = 1; return;
+    }
+    if (FLAGS.baston) return say('rosario', 'Cuídeme ese bastón, ¿ya? Y dígale al Chulla que no se demore, que la Mariquita no espera toda la noche.');
+    if (FLAGS.canelazo) return say('rosario', 'Lleve el canelazo donde Don Lucho, el sastre, y tráigame mi rebozo, ¿ya? Ahí nomás, bajando la calle.');
+    return talk({
+      start: { w: 'rosario', t: '¡Buenas noches, joven! ¿Un canelacito pa\'l frío? Achachay, esta neblina se mete hasta los huesos.', c: [{ t: 'Busco sombrero, leva y bastón para el Chulla.', g: 'r2' }, { t: 'Solo pasaba, doña Rosario.', g: 'end' }] },
+      r2: { w: 'rosario', t: '¡Ese Chulla! Siempre elegante con lo ajeno, jajay. Mire: el sastre, Don Lucho, tiene una leva, pero se muere de frío. Llévele este canelazo bien calientito.', n: 'r3', fx: () => { giveItem('canelazo', 'un canelazo'); FLAGS.canelazo = 1; } },
+      r3: { w: 'rosario', t: 'Y ya que va donde Don Lucho, tráigame mi rebozo azul que le dejé para coser. Si me lo trae, le presto el bastón de mi finadito.' }
+    });
+  };
+  lucho.talk = async () => {
+    if (FLAGS.leva) return say('lucho', 'Ahí le queda de ley la leva al Chulla. Hecha a la medida... de otro, pero bueno.');
+    if (INV.has('canelazo')) return talk({
+      start: { w: 'lucho', t: '¿Un canelazo? ¡Arrarray, qué calientito! Dios se lo pague. ¿Y qué le trae por acá? ¿Una leva para el Chulla?', c: [{ t: 'Sí, para su serenata.', g: 'l2' }] },
+      l2: { w: 'lucho', t: 'Tome, tome. Pero que la devuelva sin manchas de mistela, ¿ya? Aquí está también el rebozo de Doña Rosario... ¡ah!, y estas tijeras son de Don Efraín, el sombrerero. Dame devolviendo, porfa.', fx: () => { takeItem('canelazo'); giveItem('leva', 'leva, rebozo y tijeras'); INV.add('rebozo'); INV.add('tijeras'); FLAGS.leva = 1; } }
+    });
+    return say('lucho', 'Brrr... ¡Achachay! Buenas noches. Con este frío ni la aguja puedo sostener. Si alguien me trajera un canelacito...');
+  };
+  efrain.talk = async () => {
+    if (FLAGS.sombrero) return say('efrain', 'Que le luzca el sombrero al Chulla. ¡Y que la dama no se lo tumbe de un portazo, jajay!');
+    if (INV.has('tijeras')) return talk({
+      start: { w: 'efrain', t: '¡Mis tijeras! Ya me estaba volviendo loco buscándolas. ¿Qué le debo, joven?', c: [{ t: 'Un sombrero de copa para el Chulla.', g: 'e2' }] },
+      e2: { w: 'efrain', t: 'Para el Chulla, ¿no? Bueno, tome este sombrero de copa. Si no me lo devuelve, le cobro a usted, ¿oyó?', fx: () => { takeItem('tijeras'); giveItem('sombrero', 'un sombrero de copa'); FLAGS.sombrero = 1; } }
+    });
+    return say('efrain', 'Buenas noches. Sombreros de paño, de copa, de paja toquilla... pero sin mis tijeras no trabajo. ¿Dónde las habré dejado?');
+  };
+  balcon.talk = async () => {
+    if (M2.state === 3) return startSerenata();
+    M2.charm = 0;
+    const ok = (g) => ({ fx: () => M2.charm++, g });
+    await talk({
+      d0: { w: 'dama', t: '¿Quién anda ahí a estas horas? ¡Ay, el Chulla! ¿Y ahora qué quiere, pues?', n: 'q1' },
+      q1: { w: null, t: 'El Chulla te mira de reojo: «¿Qué le digo, amigo?»', c: [
+        { t: '«Si la belleza fuera delito, usted tendría cadena perpetua.»', ...ok('ok1') },
+        { t: '«¡Qué bestia, mija, qué guapa que está!»', g: 'bad1' },
+        { t: '«Sus ojos son luceros... y yo un farol sin kerosene.»', g: 'meh1' }] },
+      ok1: { w: 'dama', t: 'Jijiji... ¡Qué atrevido, Chulla! Pero siga, siga...', n: 'q2' },
+      bad1: { w: 'dama', t: '¡Grosero! ¡Así no se le habla a una dama de La Ronda!', n: 'q2' },
+      meh1: { w: 'dama', t: '¿Un farol sin kerosene? Ay, Chulla, ni para alumbrar sirve usted.', n: 'q2' },
+      q2: { w: null, t: 'El Chulla se acomoda el sombrero: «¿Y ahora, amigo?»', c: [
+        { t: '«Ni la neblina del Pichincha tapa la luz de su ventana.»', ...ok('ok2') },
+        { t: '«Baje, pues, que aquí me estoy congelando, ve.»', g: 'bad2' },
+        { t: '«Es más dulce que colada morada con guagua de pan.»', g: 'meh2' }] },
+      ok2: { w: 'dama', t: 'Ay, qué lindo habla... ¿Y dónde aprendió tanta labia, Chulla?', n: 'q3' },
+      bad2: { w: 'dama', t: '¡Pues póngase una chompa! Aquí no es hotel, Chulla.', n: 'q3' },
+      meh2: { w: 'dama', t: '¿Colada morada? ¡Ni que fuera finados! Jajay.', n: 'q3' },
+      q3: { w: null, t: '«Última oportunidad», suspira el Chulla.', c: [
+        { t: '«Tengo leva, sombrero y bastón... prestados, pero tengo.»', g: 'meh3' },
+        { t: '«¿Y su papá tiene platita, mija?»', g: 'bad3' },
+        { t: '«Solo le pido una sonrisa, y le canto hasta que salga el sol.»', ...ok('ok3') }] },
+      ok3: { w: 'dama', t: 'Bueno, pues... si canta bonito, lo pensaré.' },
+      meh3: { w: 'dama', t: '¡Al menos es honrado, jajay! Pero con eso no se conquista a nadie.' },
+      bad3: { w: 'dama', t: '¡Sinvergüenza! ¡Interesado!' }
+    }, 'd0');
+    if (M2.charm >= 2) {
+      await say('dama', 'Ya, Chulla. Cánteme algo bonito... y veremos.');
+      M2.state = 3; await say('chulla', '¡Amigo, acompáñeme con el ritmo! Marque el compás del sanjuanito cuando las notas lleguen al círculo.');
+      startSerenata();
+    } else {
+      await say('dama', '¡Váyase a dormir, Chulla! Y dígale a su amigo que le enseñe modales.');
+      await say('chulla', '¡Chuta! Se me cerró la ventana. Déjeme respirar y volvemos a intentar, ¿ya?');
+    }
+  };
+  M2.update = () => { if (M2.state >= 2 && !M2.done) chulla.face = -Math.PI / 2; };
+  M2.chulla = chulla;
+  M2.win = async () => {
+    CUTSCENE++;
+    await say('dama', '¡Ay, qué lindo canta, Chulla! Tome esta rosa... y venga mañana, pero con leva propia, ¿oyó?');
+    await say('chulla', '¡De ley, mi reina! Amigo sereno: esta noche usted se ganó un amigo pa\' toda la vida. ¡Qué viva Quito!');
+    CUTSCENE--; complete(M2);
+  };
+  M2.lose = async () => {
+    await say('dama', 'Ay, Chulla... desafinado como gallo de pelea. Pero bueno, le doy otra oportunidad.');
+  };
+
+  // ---------------------------------------------------- 3. PADRE ALMEIDA
+  const M3 = mission({
+    id: 'almeida', tag: 'P. Almeida', place: 'San Diego', name: 'El Padre Almeida', short: 'Padre Almeida, San Diego', pos: [3, 56.5], dawn: 0, grace: 0,
+    hint() {
+      if (this.done) return '«¿Hasta cuándo, padre Almeida?» «Hasta la vuelta, Señor.»';
+      if (this.state === 0) return 'Sube a San Diego (calle Rocafuerte, al oeste) y busca al Padre Almeida en su celda.';
+      if (this.state === 1) return 'Lleva al Padre Almeida hasta el Cristo del muro oriental sin que lo vean los frailes. Escóndete tras las columnas.';
+      if (this.state === 2) return 'Acompaña al Padre a la chichería de la calle Rocafuerte, junto a Imbabura.';
+      return '¡Ya amanece! Regresa con el Padre al Cristo, por la calle Imbabura, antes del alba.';
+    }
+  });
+  const alm = ent({ x: 2.7, y: 57.3, spr: SPR.almeida, name: 'Padre Almeida', solid: false, face: -1 });
+  const portero = ent({ x: 6.5, y: 46.4, spr: SPR.portero, name: 'Fray Portero' });
+  const cristo = ent({ x: 10.72, y: 52.5, spr: SPR.cristo, w: 0.42, h: 0.8, solid: false, name: 'el Cristo', prompt: 'Subir por el Cristo' });
+  const cristoOut = ent({ x: 12.4, y: 52.5, spr: null, solid: false, prompt: 'Trepar de vuelta por el Cristo', show: () => M3.state === 3 });
+  const frailes = [
+    { path: [[2.7, 48.7], [9.4, 48.7], [9.4, 56.3], [2.7, 56.3]], speed: 0.85, wi: 1 },
+    { path: [[9.4, 56.3], [9.4, 48.7], [2.7, 48.7], [2.7, 56.3]], speed: 0.75, wi: 2 },
+    { path: [[6.5, 49.3], [6.5, 51.0], [4.8, 51.0], [4.8, 54.2], [7.9, 54.2], [7.9, 51.0], [6.5, 51.0]], speed: 0.6 }
+  ].map(o => guard(Object.assign({ x: o.path[o.wi || 0][0], y: o.path[o.wi || 0][1], spr: SPR.fraile, fov: 1.2, range: 3.6, lantern: 1, name: 'Fray Celador' }, o)));
+  portero.talk = () => say('portero', M3.done ? 'El Padre Almeida duerme como un bendito. Dicen que ya no sale de noche... ¡milagro!' : 'Ave María Purísima. ¿Qué busca a estas horas, sereno? Pase nomás. El Padre Almeida duerme como un santito... o eso dice él.');
+  for (const f of frailes) f.talk = () => say('fraile', 'Paz y bien, hermano sereno. ¿No ha visto al Padre Almeida? Siempre anda con unas ganas de salir...');
+  alm.talk = async () => {
+    if (M3.done) return say('almeida', 'Rece por mí, sereno, que yo rezo por usted. ¡Y nada de chicherías!');
+    if (M3.state === 1) return say('almeida', 'Shhh... ¡que nos oyen! Camine delante, que yo le sigo calladito.');
+    if (M3.state === 2) return say('almeida', 'Por aquí, por la Rocafuerte. ¡Ya se oye la música de la chichería!');
+    if (M3.state === 3) return say('almeida', '¡Rápido, sereno, al Cristo! ¡Que no me vea el sol en la calle!');
+    return talk({
+      start: { w: 'almeida', t: '¡Pst! ¡Sereno! Venga, venga, que nadie nos oiga. Soy fray Manuel de Almeida... y esta noche el convento me queda chiquito.', n: 'a2' },
+      a2: { w: 'almeida', t: 'Allá afuera hay música, canelazo y gente alegre. Pero los frailes rondan con sus faroles, y la puerta la cuida el portero.', n: 'a3' },
+      a3: { w: 'almeida', t: 'Ayúdeme a llegar al Cristo del muro oriental sin que me vean. Por su brazo subo, como por escalera, y me descuelgo a la calle Imbabura. ¿Me acompaña?', c: [{ t: 'Vamos, padrecito, pero con cuidado.', g: 'go' }, { t: 'Padre, ¿y si lo pillan?', g: 'a4' }] },
+      a4: { w: 'almeida', t: '¡Ave María! No me pillarán si usted me guía por donde no alumbran los faroles. ¿Vamos?', c: [{ t: 'Ya, vamos pues.', g: 'go' }, { t: 'Mejor quédese rezando, padre.', g: 'a5' }] },
+      a5: { w: 'almeida', t: 'Ya, ya... rezaré un ratito. Pero vuelva, ¿ya?' },
+      go: { w: 'almeida', t: '¡Dios se lo pague! Camine delante, que yo le sigo calladito.', fx: () => { M3.state = 1; P.trail.length = 0; MUSIC.set('tension'); } }
+    });
+  };
+  cristo.show = () => true;
+  cristo.talk = async () => {
+    if (M3.state !== 1) return narr(M3.done ? 'El Cristo de San Diego te mira en silencio. Parece sonreír.' : 'Un Cristo de madera, muy antiguo, apoyado contra el muro oriental del convento. Su brazo parece una escalera...');
+    if (Math.hypot(alm.x - cristo.x, alm.y - cristo.y) > 2.2) return narr('El Padre Almeida tiene que estar junto a ti para subir.');
+    CUTSCENE++; await fadeTo(1, 2.5); AU.whoosh();
+    P.x = 12.8; P.y = 52.6; P.a = -Math.PI / 2; alm.x = 12.9; alm.y = 53.4; P.trail.length = 0; M3.state = 2; await wait(0.3);
+    await fadeTo(0, 2);
+    await say('almeida', '¡Libres! Un pie en el brazo del Cristo, otro en la cornisa y... ¡Aquí estamos! Vamos a la chichería de la calle Rocafuerte, aquí nomás subiendo.');
+    MUSIC.set('sanjuanito'); CUTSCENE--;
+  };
+  cristoOut.talk = async () => {
+    if (Math.hypot(alm.x - P.x, alm.y - P.y) > 2.4) return narr('Espera al Padre Almeida, que viene atrás tuyo.');
+    CUTSCENE++; const i = TIMERS_HUD.indexOf(M3.tm); if (i >= 0) TIMERS_HUD.splice(i, 1);
+    await fadeTo(1, 2.5); AU.whoosh(); P.x = 9.6; P.y = 52.7; P.a = 0; alm.x = 10.1; alm.y = 53.3; alm.face = 0; await fadeTo(0, 2);
+    MUSIC.set('off');
+    await narr('Almeida pone el pie sobre el brazo del Cristo para bajar. Entonces, la imagen habla con voz grave y serena:');
+    AU.bell(98, 0.4);
+    await say('cristo', '¿Hasta cuándo, padre Almeida?');
+    await say('almeida', 'Hasta la vuelta, Señor.');
+    await say('almeida', '...Aunque, pensándolo bien, Señor, creo que esta fue la última vuelta. ¡Gracias, sereno! Rece por mí, que yo rezo por usted.');
+    alm.x = 2.7; alm.y = 57.3; MUSIC.set('yaravi'); CUTSCENE--; complete(M3);
+  };
+  M3.update = async (dt) => {
+    if (M3.state >= 1 && M3.state <= 3 && !CUTSCENE) follower(alm, dt, 0, 2.4);
+    if (M3.state === 1 && !CUTSCENE) {
+      M3.grace -= dt;
+      for (const f of frailes) if (M3.grace <= 0 && sees(f, alm.x, alm.y)) {
+        M3.grace = 3; CUTSCENE++; AU.caught(); FLASH = 0.4; FLASH_COL = C.oro;
+        await say('fraile', '¡Padre Almeida! ¿Qué hace despierto a estas horas? ¡A su celda, ahorita mismo, y rece tres rosarios!');
+        await fadeTo(1, 3); alm.x = 2.7; alm.y = 57.3; P.x = 6.5; P.y = 49.3; P.a = Math.PI / 2; M3.state = 0; MUSIC.set('yaravi'); await fadeTo(0, 3); CUTSCENE--;
+        break;
+      }
+    }
+    if (M3.state === 2 && !CUTSCENE && Math.hypot(alm.x - 15.5, alm.y - 45.4) < 1.7) {
+      CUTSCENE++;
+      await fadeTo(1, 2);
+      await narr('Pasa un buen rato de chicha, música y zapateo en la chichería...');
+      P.x = 15.2; P.y = 44.7; P.a = Math.PI / 2; alm.x = 16.2; alm.y = 44.9; await fadeTo(0, 2);
+      await say('almeida', '¡Ay, qué rico baila la gente de Quito! Pero... ¿y eso? ¿Quién viene por la calle?');
+      AU.bell(110, 0.3);
+      await narr('Por la calle Rocafuerte pasa un cortejo fúnebre, con velas y rezos. Almeida se asoma al ataúd... y ve su propia cara.');
+      await say('almeida', '¡Jesús, María y José! ¡Soy yo el del cajón! ¡Es una señal del cielo! Lléveme de vuelta al Cristo antes del amanecer, sereno, ¡rapidito!');
+      M3.state = 3; M3.dawn = 100; MUSIC.set('tension');
+      TIMERS_HUD.push(M3.tm = { text: () => 'Amanece en ' + Math.ceil(M3.dawn) + ' s', frac: () => M3.dawn / 100, col: C.amanecer });
+      CUTSCENE--;
+    }
+    if (M3.state === 3 && !CUTSCENE) {
+      M3.dawn -= dt;
+      if (M3.dawn <= 0) {
+        CUTSCENE++; const i = TIMERS_HUD.indexOf(M3.tm); if (i >= 0) TIMERS_HUD.splice(i, 1);
+        await say('almeida', '¡Ya clarea! ¡Ya clarea!');
+        await narr('El Padre Almeida entra a escondidas por la portería... y el portero lo pesca con las alpargatas en la mano. Mañana tendrá penitencia.');
+        await fadeTo(1, 3); alm.x = 2.7; alm.y = 57.3; M3.state = 0; P.x = 6.5; P.y = 45.5; P.a = Math.PI / 2; MUSIC.set('yaravi'); await fadeTo(0, 3); CUTSCENE--;
+      }
+    }
+  };
+
+  // ---------------------------------------------------- 4. DON RAMÓN Y EL GALLO
+  const M4 = mission({
+    id: 'ramon', tag: 'Don Ramón', place: 'Calle Chile', name: 'Don Ramón y el Gallo', short: 'Don Ramón, calle Chile', pos: [64, 5], grace: 0,
+    hint() {
+      if (this.done) return 'Don Ramón prometió no volver a tomar mistelas. El gallo vigila desde la torre.';
+      if (this.state === 0) return 'Busca a Don Ramón Ayala en la tienda de mistelas (Chile y Guayaquil).';
+      return 'Lleva a Don Ramón hasta las gradas de la Catedral, en la Plaza Grande, sin que lo vean los alguaciles. Escóndete en los zaguanes.';
+    }
+  });
+  const mariana = ent({ x: 64.2, y: 5.72, spr: SPR.mariana, name: 'Doña Mariana', face: -Math.PI / 2 });
+  const ramon = ent({ x: 65.4, y: 5.2, spr: SPR.ramon, name: 'Don Ramón', solid: false });
+  const gallo = ent({ x: 45.0, y: 17.0, zAbs: 0, spr: SPR.gallo, w: 0.4, h: 0.4, solid: false, name: 'el gallo', light: 0.45 });
+  gallo.baseZ = () => SURF[ci(44, 16)] + 0.02;
+  const alguaciles = [
+    { path: [[54.5, 4.6], [62.5, 4.6]], pingpong: true, speed: 0.95 },
+    { path: [[52.6, 6.5], [52.6, 13.4]], pingpong: true, speed: 0.8 },
+    { path: [[45.2, 7.2], [50.8, 7.2], [50.8, 12.4], [45.2, 12.4]], speed: 0.9 }
+  ].map(o => guard(Object.assign({ x: o.path[0][0], y: o.path[0][1], spr: SPR.alguacil, fov: 1.2, range: 4.2, lantern: 1, name: 'Alguacil' }, o)));
+  for (const a of alguaciles) a.talk = () => say('alguacil', '¡Alto! Ah, es usted, sereno. Si ve borrachitos por ahí, avísenos, que el Corregidor quiere las calles tranquilas.');
+  mariana.talk = () => say('mariana', M4.done ? 'Don Ramón vino a pedirme un agüita de manzanilla. ¡Milagro del gallo, será!' : '¡Buenas noches, sereno! Mistelas de todos los colores: de menta, de anís, de naranjilla... Pero ese señor ya se tomó todas.');
+  ramon.talk = async () => {
+    if (M4.done) return say('ramon', 'Ni una mistela más, sereno. Ni de naranjilla. ¡Palabra de Ayala!');
+    if (M4.state === 1) return say('ramon', '¿Ya llegamos? ¡Hip! Qué larga que es la calle Chile... ¡Adelante, que yo le sigo!');
+    return talk({
+      start: { w: 'ramon', t: '¡Hip! ¿Quién es usted? ¡Ah, el sereno! Sepa que yo, Don Ramón Ayala, soy el más valiente de Quito. ¡Hip!', n: 'r2' },
+      r2: { w: 'ramon', t: 'Doña Mariana me sirvió unas mistelitas... unas seis... o diez. ¡Y ahora voy a la Plaza Grande a decirle sus verdades a ese gallito de la Catedral!', c: [{ t: 'Don Ramón, mejor vaya a dormir.', g: 'r3' }, { t: '¿Y qué le va a decir al gallo?', g: 'r4' }] },
+      r3: { w: 'ramon', t: '¡Nada de dormir! Si no me acompaña, voy solito... y ahí sí me agarran los alguaciles.', n: 'r5' },
+      r4: { w: 'ramon', t: '¡Que para mí no hay gallos! ¡Que qué gallo ni qué gallo! ¡Hip!', n: 'r5' },
+      r5: { w: 'ramon', t: 'Lléveme por las calles sin que me vean los alguaciles, ¿ya? Si nos ven, me llevan preso por borrachito. Escóndase en los zaguanes si hace falta.', c: [{ t: 'Ya, vamos, pero despacito.', g: 'go' }, { t: 'Otro rato, Don Ramón.', g: 'end' }] },
+      go: { w: 'ramon', t: '¡Así me gusta! ¡Adelante, que yo le sigo... más o menos derechito!', fx: () => { M4.state = 1; P.trail.length = 0; } }
+    });
+  };
+  M4.update = async (dt) => {
+    if (M4.state === 1 && !CUTSCENE) {
+      follower(ramon, dt, 0.35, 1.9);
+      M4.grace -= dt;
+      for (const a of alguaciles) if (M4.grace <= 0 && sees(a, ramon.x, ramon.y)) {
+        M4.grace = 3; CUTSCENE++; AU.caught(); FLASH = 0.4; FLASH_COL = C.azul1;
+        await say('alguacil', '¡Alto ahí! ¿Otra vez usted, Don Ramón? ¡A su casa a dormir la mona, que mañana es día de misa!');
+        await fadeTo(1, 3); ramon.x = 65.4; ramon.y = 5.2; P.x = 64.8; P.y = 4.6; P.a = Math.PI; P.trail.length = 0; await fadeTo(0, 3);
+        await say('ramon', '¡Hip! Esos alguaciles no me dejan en paz... Intentemos otra vez, sereno. ¡Por los zaguanes!');
+        CUTSCENE--; break;
+      }
+      if (!CUTSCENE && Math.hypot(ramon.x - 47.5, ramon.y - 14.9) < 1.6) gallito();
+    }
+  };
+  async function gallito() {
+    CUTSCENE++; M4.state = 2;
+    ramon.x = 47.6; ramon.y = 14.6; ramon.face = Math.PI / 2; P.x = 47.2; P.y = 12.6; P.a = Math.PI / 2 - 0.15; P.pitch = -30;
+    await say('ramon', '¡Gallito de la Catedral! ¡Para mí no hay gallos, oíste! ¡Qué gallo ni qué gallo! ¡Hip!');
+    AU.crow(); SHAKE = 0.3;
+    const z0 = gallo.baseZ(), x0 = gallo.x, y0 = gallo.y, z1 = floorAt(47.5, 15.4) + 0.05;
+    for (let k = 0; k <= 30; k++) { const t = k / 30; gallo.x = lerp(x0, 47.8, t); gallo.y = lerp(y0, 15.3, t); gallo.zAbs = lerp(z0, z1, t) + Math.sin(t * Math.PI) * 0.8; P.pitch = lerp(-30, 10, t); await wait(1 / 30); }
+    gallo.light = 0.9;
+    await talk({
+      a: { w: 'gallo', t: '¡Ramón Ayala! Has venido otra vez, borracho, a faltarme el respeto.', n: 'b' },
+      b: { w: 'ramon', t: '¡Ay, taita Dios! ¡El gallo habla! ¡El gallo se bajó de la torre!', n: 'c' },
+      c: { w: 'gallo', t: 'Prométeme dos cosas, o te pico hasta que amanezca.', n: 'gq' },
+      gq: { w: 'gallo', t: '¿Qué me prometes, Ramón Ayala?', c: [
+        { t: '«¡Nada! ¡Para mí no hay gallos!»', g: 'p1', fx: () => { AU.peck(); SHAKE = 0.4; FLASH = 0.2; FLASH_COL = C.rojo1; } },
+        { t: '«Prometo... tomarme solo la mitad de las mistelas.»', g: 'p2', fx: () => { AU.peck(); SHAKE = 0.4; FLASH = 0.2; FLASH_COL = C.rojo1; } },
+        { t: '«No volver a tomar mistelas, y no volver a faltarle el respeto, señor gallo.»', g: 'good' }] },
+      p1: { w: 'gallo', t: '¡Pico, pico, picotón! ¡Otra vez te pregunto!', n: 'gq' },
+      p2: { w: 'gallo', t: '¿La mitad? ¡Qué mitad ni qué mitad! ¡Pico!', n: 'gq' },
+      good: { w: 'gallo', t: 'Así me gusta. Recuérdalo, Ramón Ayala: los quiteños de palabra cumplen lo que prometen.', n: 'g2' },
+      g2: { w: 'ramon', t: '¡Lo juro por la Virgen del Quinche! Ni una mistela más... ni siquiera de naranjilla. Gracias, sereno: si no fuera por usted, me pica hasta la leva.' }
+    }, 'a');
+    AU.crow();
+    for (let k = 0; k <= 30; k++) { const t = k / 30; gallo.x = lerp(47.8, x0, t); gallo.y = lerp(15.3, y0, t); gallo.zAbs = lerp(z1, z0, t) + Math.sin(t * Math.PI) * 0.8; P.pitch = lerp(10, -20, t); await wait(1 / 30); }
+    gallo.zAbs = 0; gallo.light = 0.45;
+    await fadeTo(1, 2); ramon.x = 64.9; ramon.y = 5.4; P.pitch = 0; await fadeTo(0, 2);
+    CUTSCENE--; complete(M4);
+  }
+
+  // ---------------------------------------------------- 5. LA DAMA TAPADA
+  const M5 = mission({
+    id: 'tapada', tag: 'La Tapada', place: '7 Cruces', name: 'La Dama Tapada', short: 'La Tapada, calle de las Siete Cruces', pos: [43, 13], wi: 0,
+    hint() {
+      if (this.done) return 'El alma de la Tapada descansa. Ya nadie la verá en la calle de las Siete Cruces.';
+      if (this.state === 0) return 'Habla con Don Gerardo, el farolero, en García Moreno junto a la Plaza Grande.';
+      const n = ['clue1', 'clue2', 'clue3', 'clue4'].filter(k => FLAGS[k]).length;
+      return 'Sigue a la Tapada calle abajo por las Siete Cruces. Busca señales (' + n + ' de 4) y habla con la beata del zaguán. No te dejes engañar.';
+    }
+  });
+  const gerardo = ent({ x: 43.6, y: 12.6, spr: SPR.sereno, name: 'Don Gerardo', light: 0.9 });
+  const TWP = [[42.7, 20], [42.7, 26], [42.9, 32], [42.7, 38], [42.9, 44], [42.8, 48.4]];
+  const tapada = ent({ x: 42.7, y: 20, spr: SPR.tapada, name: 'la dama', solid: false, show: () => M5.state === 1 || M5.state === 2, dither: 1 });
+  const clueE = (x, y, spr, prompt, flag, text, extra) => ent({ x, y, spr, w: spr === SPR.huellas ? 0.4 : 0.2, h: spr === SPR.huellas ? 0.1 : 0.12, solid: false, prompt, show: () => M5.state === 1 && !FLAGS[flag], glow: { r: 0.18, y: 0.5, a: 0.35, c: C.luna },
+    talk: async () => { await narr(text); FLAGS[flag] = 1; AU.chime(); if (extra) extra(); toast('Señal encontrada'); } });
+  clueE(43.3, 23.4, SPR.panuelo, 'Recoger el pañuelo', 'clue1', 'Un pañuelo de encaje, frío como el hielo. Tiene bordada una calavera chiquita... y huele a cera de velorio.', () => INV.add('panuelo'));
+  clueE(42.6, 35.6, SPR.huellas, 'Mirar el barro', 'clue3', 'En el barro del empedrado se ven tus pisadas... pero ninguna de la dama, aunque pasó por aquí. Ella no toca el suelo.');
+  const beata = ent({ x: 44.5, y: 38.5, spr: SPR.beata, name: 'Doña Carmelita' });
+  beata.talk = async () => {
+    if (M5.state !== 1) return say('beata', 'Ave María Purísima... A estas horas solo andan los serenos y las almas, mijo.');
+    await say('beata', 'Ave María Purísima... ¿Usted también la sigue, mijo? Hágame caso: no le mire la cara ni le crea a su voz. Récele un Credo y verá quién es de verdad.');
+    if (!FLAGS.clue4) { FLAGS.clue4 = 1; AU.chime(); toast('Señal encontrada'); }
+  };
+  const CRUCES = [
+    [43.7, 7.5, 'Primera cruz, la de la Plaza Grande. Dicen que las siete cruces cuidan a los que caminan de noche.'],
+    [43.75, 17.6, 'Segunda cruz, junto a la Catedral. Una vela chiquita se consume a sus pies.'],
+    [42.25, 21.2, 'Tercera cruz, frente a La Compañía. El oro de la portada brilla aún en la oscuridad.'],
+    [43.75, 29.2, null],
+    [42.25, 33.2, 'Quinta cruz. Alguien grabó en la piedra: «Recuerda que has de morir».'],
+    [42.25, 41.2, 'Sexta cruz, la del Carmen Alto. Detrás de los muros cantan bajito las monjitas de clausura.'],
+    [43.75, 47.0, 'Séptima cruz, la del hospital de San Juan de Dios. De aquí para abajo, La Ronda.']
+  ];
+  CRUCES.forEach(([x, y, txt], k) => {
+    const c = ent({ x, y, spr: SPR.cruz, w: 0.3, h: 0.52, name: 'la cruz', prompt: 'Mirar la cruz', r: 0.15 });
+    c.talk = async () => {
+      if (txt) return narr(txt);
+      await narr('Cuarta cruz, la del Sagrario. La piedra está helada y huele fuertemente a nardos... las flores que se ponen a los difuntos. La dama pasó por aquí.');
+      if (M5.state === 1 && !FLAGS.clue2) { FLAGS.clue2 = 1; AU.chime(); toast('Señal encontrada'); }
+    };
+  });
+  gerardo.talk = async () => {
+    if (M5.done) return say('gerardo', '¡Usted es valiente, colega! Desde esta noche las Siete Cruces están tranquilas. Tome, alumbre bien su farol.');
+    if (M5.state === 1) return say('gerardo', '¿Ya vio las señales? La Tapada nunca muestra la cara... por algo será. Allá abajo la vi, rumbo a La Ronda.');
+    return talk({
+      start: { w: 'gerardo', t: '¡Buenas noches, colega! Soy Don Gerardo, farolero de las Siete Cruces desde hace cuarenta años. Ojo, mijo: esta noche anda la Tapada.', n: 't2' },
+      t2: { w: 'gerardo', t: 'Una dama bien elegante, tapada con su manto, que camina calle abajo. Los hombres la siguen embobados... y al amanecer los encuentran tiesos del susto.', c: [{ t: '¿Y quién es ella, pues?', g: 't3' }, { t: '¡Qué va a ser! Son cuentos de viejos.', g: 't2b' }] },
+      t2b: { w: 'gerardo', t: '¿Cuentos? Pregúntele a mi compadre Aurelio... si es que algún día vuelve a hablar.', n: 't3' },
+      t3: { w: 'gerardo', t: 'Nadie sabe. Si quiere descubrir su secreto, sígala sin dejarse engañar y fíjese en las señales que va dejando. Y hable con la beata del zaguán, que ella algo sabe.', c: [{ t: 'Voy a descubrirla, Don Gerardo.', g: 'go' }, { t: 'Ni loco, mejor me quedo aquí.', g: 'end' }] },
+      go: { w: 'gerardo', t: '¡Que la Virgen lo acompañe! Mire... ¡ahí está, allá abajo, junto a la Catedral!', fx: () => { M5.state = 1; M5.wi = 0; tapada.x = TWP[0][0]; tapada.y = TWP[0][1]; AU.ghost(); } }
+    });
+  };
+  tapada.talk = () => tapadaEncounter();
+  M5.update = (dt) => {
+    if (M5.state !== 1 || CUTSCENE) return;
+    const d = Math.hypot(P.x - tapada.x, P.y - tapada.y);
+    tapada.face = Math.PI / 2;
+    tapada.dither = 0.55 + Math.sin(T * 2) * 0.2;
+    if (M5.wi < TWP.length - 1) {
+      if (d < 5.2) { const w = TWP[M5.wi + 1]; if (moveToward(tapada, w[0], w[1], 1.35, dt)) M5.wi++; }
+      else tapada.moving = false;
+      if (Math.random() < dt * 0.05) AU.ghost();
+    } else {
+      tapada.moving = false; tapada.face = -Math.PI / 2;
+      if (d < 2.2) tapadaEncounter();
+    }
+  };
+  async function tapadaEncounter() {
+    if (CUTSCENE || M5.state !== 1) return;
+    CUTSCENE++; M5.state = 2;
+    const clues = ['clue1', 'clue2', 'clue3'].filter(k => FLAGS[k]).length;
+    const r = await talk({
+      d1: { w: 'tapada', t: 'Buenas noches, caballero... Me ha seguido usted toda la calle. ¿Tanto le intereso?', n: 'd2' },
+      d2: { w: 'tapada', t: 'Venga conmigo, que le muestro mi casa... y mi cara, si se atreve. ¿No quiere verme?', c: [
+        { t: '«¡Claro, mi reina! Destápese, que me muero por verla.»', g: 'trap' },
+        { t: '«No deja huellas, huele a nardos y borda calaveras: es un alma en pena.»', g: 'rev1', if: () => clues >= 3 },
+        { t: '«Récele conmigo un Credo, señora.»', g: 'rev1b', if: () => !!FLAGS.clue4 },
+        { t: '«Mejor me voy a mi casa. Buenas noches.»', g: 'leave' }] },
+      trap: { w: 'tapada', t: '¡Mírame, pues! ¡JAJAJAJAJA!', fx: () => { tapada.spr = SPR.tapada2; defWho('tapada', 'La Dama Tapada', SPR.tapada2, C.lavanda); AU.laugh(); AU.ghost(); FLASH = 0.8; FLASH_COL = C.hueso; SHAKE = 0.8; } },
+      leave: { w: 'tapada', t: 'Cobarde... Aquí lo espero, caballero. Siempre espero.' },
+      rev1: { w: 'tapada', t: '... ¿Cómo lo supo? Nadie se había fijado nunca.', n: 'rev2' },
+      rev1b: { w: null, t: 'Empiezas a rezar el Credo. La dama tiembla, y su voz se quiebra como vidrio.', n: 'rev2' },
+      rev2: { w: 'tapada', t: 'Sí... Fui una dama de la Real Audiencia. Presumida y vanidosa, jugué con el corazón de muchos galanes, y morí sin pedir perdón.', n: 'rev3', fx: () => { tapada.spr = SPR.tapada2; defWho('tapada', 'La Dama Tapada', SPR.tapada2, C.lavanda); AU.ghost(); } },
+      rev3: { w: 'tapada', t: 'Desde entonces penando voy por la calle de las Siete Cruces, buscando al que no se deje engañar. Usted me ha liberado, sereno.', n: 'rev4' },
+      rev4: { w: 'tapada', t: 'Récele a mi alma... y cuide que en Quito nadie juegue con el cariño ajeno.' }
+    }, 'd1');
+    if (r === 'trap') {
+      await fadeTo(1, 1.2, C.negro);
+      await narr('Sientes un frío de tumba... y despiertas en la esquina de la Catedral, con la chompa llena de rocío.');
+      P.x = 43.0; P.y = 13.6; P.a = Math.PI / 2; P.pitch = 0; tapada.spr = SPR.tapada; defWho('tapada', 'La Dama Tapada', SPR.tapada, C.lavanda);
+      M5.state = 1; M5.wi = 0; tapada.x = TWP[0][0]; tapada.y = TWP[0][1];
+      await fadeTo(0, 1.5);
+      await say('gerardo', '¡Chuta, le agarró la Tapada! Menos mal que es fuerte, mijo. Fíjese mejor en las señales y en lo que dice la beata.');
+      CUTSCENE--;
+    } else if (r === 'leave') {
+      M5.state = 1; CUTSCENE--;
+      P.x -= Math.cos(P.a) * 1.2; P.y -= Math.sin(P.a) * 1.2;
+    } else {
+      AU.ghost();
+      for (let k = 0; k < 24; k++) { tapada.dither = 1 - k / 24; await wait(0.08); }
+      M5.state = 3; CUTSCENE--; complete(M5);
+    }
+  }
+
+  // ---------------------------------------------------- ambiente
+  const perro = ent({ x: 29, y: 36, spr: SPR.perro, w: 0.4, h: 0.26, solid: false, name: 'un perro', tx: 29, ty: 36 });
+  perro.talk = () => { AU.dog(0.6); return narr('Un perro callejero, flaquito y cariñoso. Te mueve la cola y sigue su ronda nocturna.'); };
+  perro.update = (dt) => {
+    if (moveToward(perro, perro.tx, perro.ty, 1.6, dt) || Math.random() < dt * 0.1) {
+      for (let k = 0; k < 10; k++) { const nx = perro.x + (Math.random() - 0.5) * 8, ny = perro.y + (Math.random() - 0.5) * 8; if (walkableCell(nx | 0, ny | 0) && losWalk(perro.x, perro.y, nx, ny)) { perro.tx = nx; perro.ty = ny; break; } }
+    }
+    perro.flip = Math.cos(perro.face - P.a + Math.PI / 2) < 0;
+  };
+  for (const [x, y] of [[47.2, 9.6], [67.6, 39.6]]) ent({ x: x + 0.3, y: y + 0.4, spr: SPR.pila, w: 0.26, h: 0.62, solid: false, onLow: 1 });
+  // guardar referencias para depurar / cargar
+  Object.assign(ENTREF, { cant, chulla, alm, ramon, tapada, gallo, M1, M2, M3, M4, M5 });
+}
+const ENTREF = {};
+
+// ======================================================= SERENATA ===
+const SER = { on: false, notes: [], t0: 0, hits: 0, judged: 0, fb: '', fbT: 0 };
+function startSerenata() {
+  AU.unlock();
+  const now = AU.now(), t0 = now + 2.2;
+  SER.on = true; SER.t0 = t0; SER.hits = 0; SER.judged = 0; SER.fb = '¡Prepárese!'; SER.fbT = 2;
+  SER.notes = [];
+  const pats = [[0, 0.5], [0, 0.25, 0.5], [0, 0.5, 0.75], [0, 0.375, 0.5], [0, 0.25, 0.5, 0.75]];
+  for (let b = 0; b < 8; b++) { const p = pats[b === 0 ? 0 : (hash2(b, 7) * pats.length) | 0]; for (const o of p) SER.notes.push({ t: t0 + b + o, st: 0 }); }
+  MUSIC.startAt('serenata', t0);
+  STATE = 'SERENATA';
+}
+function updateSerenata(dt) {
+  const now = AU.now();
+  SER.fbT -= dt;
+  const hit = jp('KeyE', 'Space', 'Enter') || CLICK;
+  if (hit) {
+    let best = null, bd = 1;
+    for (const n of SER.notes) if (!n.st) { const d = Math.abs(n.t - now); if (d < bd) { bd = d; best = n; } }
+    if (best && bd < 0.16) { best.st = 1; SER.hits++; SER.judged++; SER.fb = bd < 0.07 ? '¡De ley!' : '¡Bien!'; SER.fbT = 0.6; MUSIC.rondador(AU.now(), 880, 1047, 0.2); }
+    else { SER.fb = '¡Chuta!'; SER.fbT = 0.5; }
+  }
+  for (const n of SER.notes) if (!n.st && now - n.t > 0.18) { n.st = 2; SER.judged++; SER.fb = '¡Se le fue!'; SER.fbT = 0.5; }
+  if (now > SER.notes[SER.notes.length - 1].t + 1.2) {
+    SER.on = false; STATE = 'PLAY'; MUSIC.set('yaravi');
+    const M2 = ENTREF.M2;
+    if (SER.hits >= Math.ceil(SER.notes.length * 0.65)) M2.win(); else M2.lose();
+  }
+}
+function drawSerenata(t) {
+  const now = AU.now();
+  frameBox(20, 92, 280, 50, C.noche1, C.ocre, C.madera0);
+  drawTextC('Serenata bajo el balcón: marque el compás [E]', W / 2, 95, C.oro2, C.noche0);
+  const hx = 60, y = 122;
+  rectFill(28, y - 1, 264, 2, C.madera1);
+  for (let r = 0; r < 8; r++) for (let a = 0; a < 24; a++) { const an = a / 24 * TAU; putp((hx + Math.cos(an) * (7 + (r > 3 ? 1 : 0))) | 0, (y + Math.sin(an) * 7) | 0, PAL32[C.oro]); }
+  for (const n of SER.notes) {
+    const x = hx + (n.t - now) * 110; if (x < 24 || x > 296) continue;
+    if (n.st === 1) continue;
+    drawText('♪', x - 2, y - 7, n.st === 2 ? C.piedra2 : C.cal, C.noche0);
+  }
+  drawText('Aciertos: ' + SER.hits + '/' + SER.notes.length, 214, 130, C.cal2, C.noche0);
+  if (SER.fbT > 0) drawTextC(SER.fb, W / 2, 104, SER.fb.startsWith('¡C') || SER.fb.startsWith('¡Se') ? C.naranja : C.oro2, C.noche0);
+}
+
+// ========================================================= GUARDADO ===
+const SAVE_KEY = 'quitoLeyendas.v1';
+function saveGame(silent) {
+  try {
+    const data = { v: 1, x: P.x, y: P.y, a: P.a, done: MISSIONS.filter(m => m.done).map(m => m.id), inv: [...INV], flags: FLAGS, m2: ENTREF.M2.state < 99 ? ENTREF.M2.state : 99, vol: [AU.volMus, AU.volSfx] };
+    localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+    if (!silent) toast('Partida guardada', C.cal);
+  } catch (e) { toast('No se pudo guardar', C.naranja); }
+}
+function hasSave() { try { return !!localStorage.getItem(SAVE_KEY); } catch (e) { return false; } }
+function loadGame() {
+  try {
+    const d = JSON.parse(localStorage.getItem(SAVE_KEY)); if (!d) return false;
+    P.x = d.x; P.y = d.y; P.a = d.a;
+    INV.clear(); (d.inv || []).forEach(i => INV.add(i));
+    Object.assign(FLAGS, d.flags || {}); FLAGS.diablo = 0; FLAGS.humo = 0;
+    for (const m of MISSIONS) if ((d.done || []).includes(m.id)) { m.done = true; m.state = 99; }
+    const M2 = ENTREF.M2;
+    if (!M2.done && d.m2 >= 1) { M2.state = Math.min(2, d.m2); if (M2.state >= 2) { M2.chulla.spr = SPR.chulla2; defWho('chulla', 'El Chulla', SPR.chulla2); M2.chulla.x = 56.8; M2.chulla.y = rondaY(57) + 1.2; } }
+    if (M2.done) { M2.chulla.spr = SPR.chulla2; defWho('chulla', 'El Chulla', SPR.chulla2); M2.chulla.x = 56.8; M2.chulla.y = rondaY(57) + 1.2; }
+    if (d.vol) { AU.volMus = d.vol[0]; AU.volSfx = d.vol[1]; AU.setVolumes(); }
+    INV.delete('piedra');
+    if (!canStand(P.x, P.y, floorAt(P.x, P.y))) { P.x = 47.5; P.y = 12.2; }
+    return true;
+  } catch (e) { return false; }
+}
+
+// =========================================================== FINAL ===
+const END = { t: 0, credits: 0 };
+async function finale() {
+  while (CUTSCENE || DLG.on) await wait(0.2);
+  CUTSCENE++;
+  await narr('Las cinco almas de Quito ya descansan en paz. A lo lejos, las campanas llaman a la misa de alba...');
+  await fadeTo(1, 0.8);
+  STATE = 'ENDING'; END.t = 0; MUSIC.set('dawn');
+  for (let k = 0; k < 6; k++) setTimeout(() => AU.bell([196, 262, 147, 220, 175, 247][k], 0.45, (k % 3 - 1) * 0.6), 1500 + k * 1700);
+  CUTSCENE--;
+  await fadeTo(0, 0.5);
+  try { localStorage.setItem(SAVE_KEY + '.fin', '1'); } catch (e) { }
+}
+const CREDITS = [
+  ['LEYENDAS DE QUITO', C.oro2, 2], ['', 0], ['Una noche en la Real Audiencia', C.cal], ['', 0], ['', 0],
+  ['Basado en la tradición oral quiteña', C.oro], ['', 0], ['Cantuña y el atrio de San Francisco', C.cal], ['El Chulla quiteño', C.cal], ['El Padre Almeida', C.cal],
+  ['Don Ramón Ayala y el Gallo de la Catedral', C.cal], ['La Dama Tapada', C.cal], ['', 0], ['', 0],
+  ['Motor, pixel art, música y sonido', C.oro], ['generados íntegramente por código', C.cal], ['', 0],
+  ['Música original de inspiración andina:', C.oro], ['yaraví y sanjuanito generativos', C.cal], ['quena, rondador, charango y bombo sintetizados', C.cal], ['', 0], ['', 0],
+  ['Gracias por jugar.', C.oro2], ['¡Dios le pague, sereno!', C.oro2], ['', 0], ['', 0], ['FIN', C.oro2, 2]
+];
+function updateEnding(dt) {
+  END.t += dt;
+  const t = END.t, dawn = clamp((t - 2) / 16, 0, 1);
+  buildLUT(envMix(ENV_NIGHT, ENV_DAWN, smooth(dawn)));
+  blendPano(smooth(dawn));
+  RENDER.lantern = 0; RENDER.mist = 0.28 * (1 - dawn) + 0.12; RENDER.maxD = 80;
+  if (t > 40 && (jp('Enter', 'Escape', 'KeyE', 'Space') || CLICK)) { toTitle(); }
+}
+function endingCam() {
+  const t = END.t, k = smooth(clamp(t / 12, 0, 1));
+  return { x: 47.5, y: lerp(57.5, 59.5, k), z: lerp(-1.5, 6.2, k), a: -Math.PI / 2 + Math.sin(t * 0.05) * 0.5 + 0.25, pitch: lerp(20, -34, k) };
+}
+function drawCredits() {
+  const t = END.t - 14; if (t < 0) return;
+  let y = H - t * 11;
+  for (const [txt, col, sc] of CREDITS) {
+    if (txt && y > -20 && y < H) { const w = textWidth(txt, sc || 1); rectDither(W / 2 - w / 2 - 4, y + 1, w + 8, (sc || 1) * 10, C.noche0, 0.55); drawTextC(txt, W / 2, y, col, C.noche0, sc || 1); }
+    y += sc ? 22 : 12;
+  }
+  if (END.t > 40 && ((END.t * 2) | 0) % 2) drawTextC(IS_TOUCH ? 'Toca para volver al título' : 'Pulsa Enter para volver al título', W / 2, H - 12, C.cal2, C.noche0);
+}
+
+// ============================================================ JUGADOR ===
+function updatePlayer(dt) {
+  const locked = document.pointerLockElement === cvs;
+  if (locked) { P.a += MDX * 0.0023; P.pitch = clamp(P.pitch - MDY * 0.3, -55, 55); }
+  if (kd('ArrowLeft')) P.a -= 2.3 * dt;
+  if (kd('ArrowRight')) P.a += 2.3 * dt;
+  if (kd('PageUp')) P.pitch = clamp(P.pitch + 60 * dt, -55, 55);
+  if (kd('PageDown')) P.pitch = clamp(P.pitch - 60 * dt, -55, 55);
+  P.a += TOUCH.lookDX * 0.0065; P.pitch = clamp(P.pitch - TOUCH.lookDY * 0.35, -55, 55); TOUCH.lookDX = TOUCH.lookDY = 0;
+  let f = (kd('KeyW', 'ArrowUp') ? 1 : 0) - (kd('KeyS', 'ArrowDown') ? 1 : 0) + TOUCH.my;
+  let s = (kd('KeyD') ? 1 : 0) - (kd('KeyA') ? 1 : 0) + TOUCH.mx;
+  const len = Math.hypot(f, s); if (len > 1) { f /= len; s /= len; }
+  const run = kd('ShiftLeft', 'ShiftRight') ? 1.45 : 1;
+  const sp = 2.25 * run * dt;
+  const ca = Math.cos(P.a), sa = Math.sin(P.a);
+  const dx = (ca * f - sa * s) * sp, dy = (sa * f + ca * s) * sp;
+  const ox = P.x, oy = P.y;
+  if (dx || dy) moveBody(P, dx, dy, 0.2);
+  // empujar fuera de NPCs sólidos
+  for (const e of ENTS) {
+    if (!e.solid || !e.spr || !e.show()) continue;
+    const ex = P.x - e.x, ey = P.y - e.y, d = Math.hypot(ex, ey), md = 0.2 + e.r;
+    if (d < md && d > 0.001) { const push = (md - d); moveBody(P, ex / d * push, ey / d * push, 0.2); }
+  }
+  const moved = Math.hypot(P.x - ox, P.y - oy);
+  P.moving = moved > 0.001;
+  if (P.moving) {
+    P.bob += moved * 5.2; P.stepAcc += moved;
+    if (P.stepAcc > 0.62) {
+      P.stepAcc = 0;
+      const ft = FTEX[ci(P.x | 0, P.y | 0)];
+      AU.step(ft === TX.f_tierra ? 'tierra' : ft === TX.f_jardin ? 'hierba' : 'piedra');
+    }
+  }
+  const last = P.trail[P.trail.length - 1];
+  if (!last || Math.hypot(last[0] - P.x, last[1] - P.y) > 0.15) { P.trail.push([P.x, P.y]); if (P.trail.length > 60) P.trail.shift(); }
+  const target = floorAt(P.x, P.y);
+  P.z += (target - P.z) * Math.min(1, dt * 12);
+  P.hidden = inZag(P.x, P.y);
+  // zona
+  const zn = ZONES[ZONE[ci(P.x | 0, P.y | 0)]] || '';
+  if (zn && zn !== HUD.zone) { HUD.zone = zn; HUD.zoneT = 3.5; }
+}
+function findInteract() {
+  let best = null, bd = 1e9;
+  for (const e of ENTS) {
+    if (!e.talk || !e.show()) continue;
+    const dx = e.x - P.x, dy = e.y - P.y, d = Math.hypot(dx, dy);
+    if (d > 1.55) continue;
+    const ad = Math.abs(angDiff(Math.atan2(dy, dx), P.a));
+    if (ad > 0.95 && d > 0.6) continue;
+    const score = d + ad * 0.8;
+    if (score < bd) { bd = score; best = e; }
+  }
+  return best;
+}
+
+// ========================================================== ESTADOS ===
+let MENU_SEL = 0, PAUSE_SEL = 0, HELP = false;
+function toTitle() {
+  STATE = 'TITLE'; MENU_SEL = 0; buildLUT(ENV_NIGHT); PANO = PANO_N; RENDER.lantern = 0.36; RENDER.mist = 0.28; RENDER.maxD = 34;
+  MUSIC.set('yaravi'); if (document.pointerLockElement) document.exitPointerLock();
+}
+function newGame() {
+  resetWorldState();
+  P.x = 47.5; P.y = 12.2; P.a = Math.PI / 2 + 0.25; P.pitch = 0; P.z = floorAt(P.x, P.y);
+  STATE = 'PLAY'; MUSIC.set('yaravi');
+  (async () => {
+    CUTSCENE++;
+    await fadeTo(1, 50); await wait(0.2); await fadeTo(0, 0.7);
+    await narr('San Francisco de Quito, Real Audiencia. Una noche fría de neblina, en tiempos que ya nadie recuerda...');
+    await narr('Eres el nuevo sereno de la ciudad. Tu oficio: alumbrar las calles con tu farol y cantar las horas. Pero esta noche, cinco almas de Quito necesitan tu ayuda antes del amanecer.');
+    await narr('Pulsa M para ver el plano de la ciudad y J para tu diario. Con E hablas con la gente. ¡Que Dios te acompañe, sereno!');
+    CUTSCENE--;
+  })();
+}
+function resetWorldState() {
+  ENTS.length = 0; MISSIONS.length = 0; TIMERS_HUD.length = 0; INV.clear();
+  for (const k in FLAGS) delete FLAGS[k];
+  setupEntities();
+}
+function onBlurPause() { if (STATE === 'PLAY' && !DLG.on) { STATE = 'PAUSE'; PAUSE_SEL = 0; } }
+document.addEventListener('pointerlockchange', () => {
+  if (!document.pointerLockElement && STATE === 'PLAY' && !IS_TOUCH && !DLG.on && !CUTSCENE) { STATE = 'PAUSE'; PAUSE_SEL = 0; }
+});
+cvs.addEventListener('pointerdown', e => {
+  CLICK = canvasPos(e.clientX, e.clientY); AU.unlock();
+  if (STATE === 'PLAY' && !IS_TOUCH && !DLG.on && document.pointerLockElement !== cvs) { try { cvs.requestPointerLock(); } catch (er) { } }
+});
+
+function update(dt) {
+  T += dt;
+  for (let i = WAITS.length - 1; i >= 0; i--) { WAITS[i].t -= dt; if (WAITS[i].t <= 0) { const w = WAITS.splice(i, 1)[0]; w.r(); } }
+  if (FADE.v !== FADE.target) {
+    FADE.v += Math.sign(FADE.target - FADE.v) * Math.min(Math.abs(FADE.target - FADE.v), dt * FADE.speed);
+    if (FADE.v === FADE.target && FADE.res) { const r = FADE.res; FADE.res = null; r(); }
+  } else if (FADE.res) { const r = FADE.res; FADE.res = null; r(); }
+  FLASH = Math.max(0, FLASH - dt); SHAKE = Math.max(0, SHAKE - dt); HUD.zoneT -= dt;
+  for (const m of TOASTS) m.t -= dt;
+  RENDER.flick = 0.93 + fbm(T * 3.1, 1.7, 2) * 0.12;
+  AU.update(dt, T, STATE === 'ENDING' ? 0.5 : 1);
+  syncTouch();
+
+  if (STATE === 'TITLE') {
+    if (HELP) { if (jp('Escape', 'Enter', 'KeyE', 'Space') || CLICK) HELP = false; return; }
+    const items = titleItems();
+    const r = menuInput(items.length, MENU_SEL, W / 2, 128);
+    MENU_SEL = r.sel;
+    if (r.go) {
+      AU.unlock(); AU.blip(1100);
+      const it = items[MENU_SEL];
+      if (it === 'Nueva partida') newGame();
+      else if (it === 'Continuar') { resetWorldState(); loadGame(); P.z = floorAt(P.x, P.y); STATE = 'PLAY'; MUSIC.set('yaravi'); toast('Bienvenido de vuelta, sereno'); }
+      else HELP = true;
+    }
+    return;
+  }
+  if (STATE === 'PAUSE') {
+    const items = pauseItems();
+    const r = menuInput(items.length, PAUSE_SEL, W / 2, 80);
+    PAUSE_SEL = r.sel;
+    if (jp('Escape', 'KeyP')) { STATE = 'PLAY'; return; }
+    const adj = jp('ArrowRight', 'KeyD') ? 1 : jp('ArrowLeft', 'KeyA') ? -1 : 0;
+    if (adj && PAUSE_SEL === 2) { AU.volMus = clamp(AU.volMus + adj * 0.1, 0, 1); AU.setVolumes(); }
+    if (adj && PAUSE_SEL === 3) { AU.volSfx = clamp(AU.volSfx + adj * 0.1, 0, 1); AU.setVolumes(); AU.blip(800); }
+    if (r.go) {
+      if (PAUSE_SEL === 0) STATE = 'PLAY';
+      else if (PAUSE_SEL === 1) saveGame();
+      else if (PAUSE_SEL === 2) { AU.volMus = AU.volMus >= 0.95 ? 0 : clamp(AU.volMus + 0.2, 0, 1); AU.setVolumes(); }
+      else if (PAUSE_SEL === 3) { AU.volSfx = AU.volSfx >= 0.95 ? 0 : clamp(AU.volSfx + 0.2, 0, 1); AU.setVolumes(); }
+      else if (PAUSE_SEL === 4) { saveGame(true); toTitle(); }
+    }
+    return;
+  }
+  if (STATE === 'MAP') { if (jp('KeyM', 'Escape', 'Tab') || CLICK) STATE = 'PLAY'; return; }
+  if (STATE === 'JOURNAL') { if (jp('KeyJ', 'Escape') || CLICK) STATE = 'PLAY'; return; }
+  if (STATE === 'ENDING') { updateEnding(dt); return; }
+  if (STATE === 'SERENATA') { HUD.prompt = ''; updateSerenata(dt); updateWorldEnts(dt); return; }
+
+  // ---- PLAY
+  if (DLG.on) { updateDialog(dt); updateWorldEnts(dt); return; }
+  if (jp('Escape', 'KeyP') && !CUTSCENE) { STATE = 'PAUSE'; PAUSE_SEL = 0; return; }
+  if (!CUTSCENE) {
+    if (jp('KeyM', 'Tab')) { STATE = 'MAP'; AU.blip(600); return; }
+    if (jp('KeyJ')) { STATE = 'JOURNAL'; AU.blip(600); return; }
+    updatePlayer(dt);
+    const it = findInteract();
+    HUD.prompt = it ? (it.prompt || ('Hablar con ' + it.name)) : '';
+    if (it && jp('KeyE', 'Space', 'Enter')) { HUD.prompt = ''; it.talk(); }
+  } else HUD.prompt = '';
+  for (const m of MISSIONS) m.update(dt);
+  updateWorldEnts(dt);
+}
+function updateWorldEnts(dt) {
+  for (const e of ENTS) {
+    if (e.path && e.show()) patrol(e, dt);
+    if (e.update) e.update(dt);
+  }
+}
+function titleItems() { const a = ['Nueva partida']; if (hasSave()) a.push('Continuar'); a.push('Cómo jugar'); return a; }
+function pauseItems() {
+  const bar = v => '#'.repeat(Math.round(v * 10)) + '.'.repeat(10 - Math.round(v * 10));
+  return ['Continuar', 'Guardar partida', 'Música  ' + bar(AU.volMus), 'Efectos ' + bar(AU.volSfx), 'Guardar y salir al título'];
+}
+
+// ============================================================ DIBUJO ===
+function queueWorldSprites(cam) {
+  for (const L of LAMPS) {
+    const d = Math.abs(L.x - cam.x) + Math.abs(L.y - cam.y); if (d > 30) continue;
+    const fz = floorAt(L.lx, L.ly);
+    if (L.post) queueSprite({ x: L.x, y: L.y, z: fz, w: 0.2, h: 1.0, img: SPR.poste[(T * 7 + L.x) % 2 | 0], light: 0.5, glow: { r: 0.42, y: 0.14, a: 0.55, c: C.oro } });
+    else queueSprite({ x: L.x, y: L.y, z: fz + L.z, w: 0.2, h: 0.34, img: SPR.farol[(T * 7 + L.y) % 2 | 0], light: 0.5, glow: { r: 0.45, y: 0.5, a: 0.6, c: C.oro } });
+  }
+  for (const e of ENTS) {
+    if (!e.spr || !e.show()) continue;
+    const d = Math.abs(e.x - cam.x) + Math.abs(e.y - cam.y); if (d > 34) continue;
+    const fr = e.spr;
+    let img;
+    if (e.frameOverride !== undefined && fr[e.frameOverride]) img = fr[e.frameOverride];
+    else if (fr.length === 3) img = e.moving ? fr[1 + ((e.anim * 3) | 0) % 2] : fr[0];
+    else img = fr[((T * (e.moving ? 6 : 1.5)) | 0) % fr.length];
+    const z = e.zAbs ? e.zAbs : e.baseZ ? e.baseZ() : floorAt(e.x, e.y) + e.z;
+    queueSprite({ x: e.x, y: e.y, z, w: e.w, h: e.h, img, light: e.light, glow: e.glow, flip: e.flip, dither: e.dither });
+  }
+}
+function dynLights() {
+  LM.set(LM0);
+  for (const e of ENTS) {
+    if (!e.show() || !e.spr) continue;
+    if (e.lantern) stampLight(e.x + Math.cos(e.lookFace ?? e.face) * 0.9, e.y + Math.sin(e.lookFace ?? e.face) * 0.9, 2.4, 0.55);
+    if (e.redLight) stampLight(e.x, e.y, 1.3, 0.25);
+    if (e === ENTREF.gallo && e.light > 0.5) stampLight(e.x, e.y, 2, 0.5);
+  }
+  if (FLAGS.diablo) stampLight(24.6, 29.6, 3, 0.8);
+}
+function renderScene(cam) {
+  dynLights();
+  const hor = renderWorld(cam);
+  queueWorldSprites(cam);
+  renderSprites(cam, hor);
+  renderMist(cam, hor, T);
+  return hor;
+}
+function playerCam() {
+  const bob = Math.sin(P.bob) * 0.018;
+  let a = P.a, pitch = P.pitch;
+  if (SHAKE > 0) { a += (Math.random() - 0.5) * SHAKE * 0.06; pitch += (Math.random() - 0.5) * SHAKE * 8; }
+  return { x: P.x, y: P.y, z: P.z + 0.45 + bob, a, pitch };
+}
+function drawLantern() {
+  if (STATE !== 'PLAY' && STATE !== 'SERENATA') return;
+  const bx = Math.sin(P.bob * 0.5) * 3, by = Math.abs(Math.cos(P.bob * 0.5)) * 3;
+  const img = SPR.mano[((T * 8) | 0) % 2];
+  blit8(img, W - 58 + bx, H - 52 + by, 1);
+}
+function drawTitle(t) {
+  const cam = { x: 47.9 + Math.cos(t * 0.05) * 2.2, y: 11 + Math.sin(t * 0.05) * 1.6, z: floorAt(48, 11) + 0.55, a: t * 0.05 + Math.PI, pitch: -6 };
+  renderScene(cam);
+  rectDither(0, 0, W, 70, C.noche0, 0.55);
+  drawTextC('LEYENDAS', W / 2 + 1, 14, C.madera0, -1, 3);
+  drawTextC('LEYENDAS', W / 2, 13, C.oro2, C.madera1, 3);
+  drawTextC('DE QUITO', W / 2, 40, C.oro, C.madera0, 2);
+  drawTextC('Una noche en la Real Audiencia', W / 2, 62, C.cal2, C.noche0);
+  if (HELP) {
+    frameBox(20, 76, 280, 118, C.noche1, C.ocre, C.madera0);
+    const lines = IS_TOUCH ? ['Joystick izquierdo: caminar', 'Arrastra a la derecha: mirar', 'E: hablar / usar     M: plano     J: diario', 'II: pausa y guardar', '', 'Toca las opciones en los diálogos.']
+      : ['W A S D / flechas: caminar     Shift: apurarse', 'Ratón (clic para capturar): mirar', 'E o Espacio: hablar / usar', 'M o Tab: plano de pergamino     J: diario', 'Esc o P: pausa y guardar', '1-3 o flechas: elegir respuesta'];
+    lines.forEach((l, k) => drawText(l, 30, 84 + k * 12, C.cal, C.noche0));
+    drawText('Las cinco leyendas se pueden hacer en cualquier orden.', 30, 162, C.oro2, C.noche0);
+    drawTextC('(Enter para volver)', W / 2, 178, C.niebla2, C.noche0);
+    return;
+  }
+  drawMenu(titleItems(), MENU_SEL, W / 2, 128, t);
+  drawTextC(AU.ok ? '' : (IS_TOUCH ? 'Toca para empezar' : 'Enter para empezar'), W / 2, 186, C.niebla2, C.noche0);
+}
+function drawPause(t) {
+  rectDither(0, 0, W, H, C.noche0, 0.6);
+  frameBox(70, 40, 180, 120, C.noche1, C.ocre, C.madera0);
+  drawTextC('Pausa', W / 2, 50, C.oro2, C.noche0, 2);
+  drawMenu(pauseItems(), PAUSE_SEL, W / 2, 80, t);
+  drawTextC('< > ajusta el volumen', W / 2, 146, C.niebla2, C.noche0);
+}
+function draw() {
+  const t = T;
+  if (STATE === 'TITLE') drawTitle(t);
+  else if (STATE === 'MAP') drawMapScreen(t);
+  else if (STATE === 'JOURNAL') drawJournal(t);
+  else if (STATE === 'ENDING') {
+    renderScene(endingCam());
+    if (END.t < 14) drawTextC(END.t > 3 ? 'Amanece sobre San Francisco de Quito' : '', W / 2, 20, C.cal, C.noche0);
+    drawCredits();
+  } else {
+    renderScene(playerCam());
+    drawLantern();
+    if (STATE !== 'PAUSE') drawHUD(t);
+    if (STATE === 'SERENATA') drawSerenata(t);
+    drawDialog(t);
+    if (STATE === 'PAUSE') drawPause(t);
+  }
+  if (FLASH > 0) rectDither(0, 0, W, H, FLASH_COL, FLASH * 0.8);
+  if (FADE.v > 0) rectDither(0, 0, W, H, FADE.col, FADE.v * 1.02);
+  ctx.putImageData(IMG, 0, 0);
+}
+
+// ============================================================ TÁCTIL ===
+Object.assign(TOUCH, { lookDX: 0, lookDY: 0 });
+function syncTouch() {
+  if (!IS_TOUCH) return;
+  const show = STATE === 'PLAY' && !DLG.on && !CUTSCENE;
+  const el = document.getElementById('touch');
+  const want = show ? 'block' : 'none';
+  if (el.style.display !== want) el.style.display = want;
+  if (!show) { TOUCH.mx = TOUCH.my = 0; }
+}
+(function setupTouch() {
+  const stick = document.getElementById('stick'), knob = document.getElementById('knob'), look = document.getElementById('look');
+  const setKnob = (dx, dy) => { knob.style.left = (40 + dx) + 'px'; knob.style.top = (40 + dy) + 'px'; };
+  stick.addEventListener('pointerdown', e => { TOUCH.stickId = e.pointerId; stick.setPointerCapture(e.pointerId); AU.unlock(); e.preventDefault(); });
+  stick.addEventListener('pointermove', e => {
+    if (e.pointerId !== TOUCH.stickId) return;
+    const r = stick.getBoundingClientRect(); let dx = e.clientX - (r.left + r.width / 2), dy = e.clientY - (r.top + r.height / 2);
+    const d = Math.hypot(dx, dy), m = 44; if (d > m) { dx = dx / d * m; dy = dy / d * m; }
+    TOUCH.mx = dx / m; TOUCH.my = -dy / m; setKnob(dx, dy);
+  });
+  const end = e => { if (e.pointerId === TOUCH.stickId) { TOUCH.stickId = null; TOUCH.mx = TOUCH.my = 0; setKnob(0, 0); } };
+  stick.addEventListener('pointerup', end); stick.addEventListener('pointercancel', end);
+  look.addEventListener('pointerdown', e => { TOUCH.lookId = e.pointerId; TOUCH.lx = e.clientX; TOUCH.ly = e.clientY; look.setPointerCapture(e.pointerId); AU.unlock(); });
+  look.addEventListener('pointermove', e => { if (e.pointerId !== TOUCH.lookId) return; TOUCH.lookDX += e.clientX - TOUCH.lx; TOUCH.lookDY += e.clientY - TOUCH.ly; TOUCH.lx = e.clientX; TOUCH.ly = e.clientY; });
+  look.addEventListener('pointerup', e => { if (e.pointerId === TOUCH.lookId) TOUCH.lookId = null; });
+  for (const [id, code] of [['bE', 'KeyE'], ['bM', 'KeyM'], ['bJ', 'KeyJ'], ['bP', 'Escape']])
+    document.getElementById(id).addEventListener('pointerdown', e => { JP.add(code); AU.unlock(); e.preventDefault(); e.stopPropagation(); });
+})();
+
+// ============================================================= BUCLE ===
+let lastT = performance.now(), FPS = 60;
+function frame(now) {
+  const dt = Math.min(0.05, (now - lastT) / 1000); lastT = now;
+  FPS = FPS * 0.95 + (1 / Math.max(dt, 0.001)) * 0.05;
+  try { update(dt); draw(); } catch (e) { console.error(e); }
+  JP.clear(); MDX = MDY = 0; CLICK = null;
+  requestAnimationFrame(frame);
+}
+function init() {
+  genTextures(); genSprites(); buildWorld(); buildLightmap();
+  PANO_N = buildPano(false); PANO_D = buildPano(true); PANO = PANO_N;
+  setupEntities();
+  P.z = floorAt(P.x, P.y);
+  MUSIC.set('yaravi');
+  requestAnimationFrame(frame);
+}
+// Ganchos de depuración (también útiles para pruebas automatizadas)
+window.__debug = {
+  get state() { return STATE; }, P, MISSIONS, ENTREF, get fps() { return FPS; },
+  tp(x, y, a) { P.x = x; P.y = y; if (a !== undefined) P.a = a; P.z = floorAt(x, y); P.trail.length = 0; },
+  play() { resetWorldState(); P.x = 47.5; P.y = 12.2; P.a = Math.PI / 2; P.z = floorAt(P.x, P.y); STATE = 'PLAY'; },
+  set(s) { STATE = s; }, finale() { for (const m of MISSIONS) { m.done = true; m.state = 99; } finale(); },
+  endAt(t) { STATE = 'ENDING'; END.t = t; }, talk: () => { const e = findInteract(); if (e) e.talk(); return e && e.name; },
+  FLAGS, SER, get dlg() { return DLG.on; }, get ch() { return DLG.on && DLG.chars >= pageLen() && DLG.page >= DLG.pages.length - 1 && DLG.choices ? DLG.choices.length : 0; }, get cut() { return CUTSCENE; }, INV,
+  goto(name) {
+    const e = ENTS.find(en => en.name === name); if (!e) return 'no ' + name;
+    for (let k = 0; k < 16; k++) { const a = k / 16 * TAU, x = e.x + Math.cos(a) * 0.95, y = e.y + Math.sin(a) * 0.95; if (canStand(x, y, floorAt(e.x, e.y) + 0.3)) { P.x = x; P.y = y; P.a = a + Math.PI; P.z = floorAt(x, y); return 'ok'; } }
+    return 'blocked';
+  },
+  winSer() { SER.hits = SER.notes.length; SER.notes.forEach(n => { n.st = 1; n.t = AU.now() - 3; }); }
+};
+init();
+</script>
+</body>
+</html>
