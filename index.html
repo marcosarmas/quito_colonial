@@ -1163,6 +1163,9 @@ function placeLamps() {
   const posts = [[44.6, 6.6], [51.4, 6.6], [44.6, 13.4], [51.4, 13.4], [26.6, 26.6], [31.4, 26.6], [26.6, 33.4], [31.4, 33.4],
   [64.6, 36.6], [71.4, 36.6], [64.6, 43.4], [71.4, 43.4], [3, 42.6], [10.5, 42.6], [3.2, 49.2], [9.6, 49.2], [3.2, 56.6], [9.6, 56.6], [43, 55.5], [52.5, 55.5], [23, 26.8], [23, 33.2]];
   for (const [x, y] of posts) LAMPS.push({ x, y, z: 0, lx: x, ly: y, post: true });
+  // Callejón del Cantero: farol en la entrada y otro al fondo, visibles desde la plaza
+  LAMPS.push({ x: 27.08, y: 36.6, z: 1.15, lx: 27.4, ly: 36.6, post: false });
+  LAMPS.push({ x: 28.3, y: 41.92, z: 0.95, lx: 28.3, ly: 41.5, post: false });
   for (const l of LAMPS) LIGHTS.push({ x: l.lx, y: l.ly, r: l.post ? 4.8 : 4.4, i: 0.82 });
 }
 
@@ -1652,6 +1655,16 @@ const AU = {
     const g = c.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.35, t + 0.05); g.gain.setValueAtTime(0.3, t + 0.9); g.gain.linearRampToValueAtTime(0.0001, t + 1.15);
     o.connect(bp); bp.connect(g); this.out(g, this.sfx, 0.45); o.start(t); o.stop(t + 1.2);
   },
+  chisel(vol = 0.3) {   // golpecitos de cincel: guía auditiva hacia la piedra
+    if (!this.ok) return; const c = this.ctx;
+    for (let k = 0; k < 2; k++) {
+      const t = c.currentTime + k * 0.16;
+      const s = this.noiseSrc(t, 0.03), bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 3200; bp.Q.value = 3;
+      const g = c.createGain(); this.env(g, t, 0.001, vol, 0.03); s.connect(bp); bp.connect(g); this.out(g, this.sfx, 0.35);
+      const o = c.createOscillator(); o.frequency.value = 1900 + k * 140;
+      const g2 = c.createGain(); this.env(g2, t, 0.001, vol * 0.25, 0.08); o.connect(g2); this.out(g2, this.sfx, 0.35); o.start(t); o.stop(t + 0.1);
+    }
+  },
   whoosh() {
     if (!this.ok) return; const c = this.ctx, t = c.currentTime;
     const s = this.noiseSrc(t, 1.2), bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 2;
@@ -1990,6 +2003,16 @@ function drawMapScreen(t) {
     if (m.done) { drawText('*', px - 2, py - 5, C.oro, C.madera0); }
     else { rectFill(px - 4, py - 4, 9, 9, blink ? C.rojo1 : C.rojo0); drawText(String(k + 1), px - 1, py - 5, C.cal); }
   });
+  // objetivo de Cantuña: la piedra o el hueco bajo las gradas
+  const M1 = MISSIONS[0];
+  if (M1 && M1.state === 1) {
+    const [gx, gy] = INV.has('piedra') ? [25.7, 30] : [27.6, 41.3];
+    const px = ox + gx * S, py = oy + gy * S, blink = ((t * 4) | 0) % 2;
+    for (let a = 0; a < 20; a++) { const an = a / 20 * TAU, r = blink ? 5 : 6; putp((px + Math.cos(an) * r) | 0, (py + Math.sin(an) * r) | 0, PAL32[C.rojo1]); }
+    rectFill(px - 1, py - 1, 3, 3, C.rojo0);
+    const lbl = INV.has('piedra') ? 'Hueco' : 'La piedra';
+    const w = textWidth(lbl); rectDither(px - w / 2 - 1, py + 8, w + 2, 9, C.cal, 0.8); drawText(lbl, px - w / 2, py + 7, C.rojo0);
+  }
   // jugador
   const ppx = ox + P.x * S, ppy = oy + P.y * S;
   for (let r = 0; r < 6; r++) {
@@ -2011,7 +2034,7 @@ function drawMapScreen(t) {
   });
   drawText('Tú:', lx, 126, C.madera0); rectFill(lx + 18, 131, 3, 3, C.azul1);
   wrapText(ZONES[ZONE[ci(P.x | 0, P.y | 0)]] || '', 58).forEach((l, j) => drawText(l, lx, 138 + j * 9, C.madera1));
-  for (const [txt, x, y] of [['Plaza Grande', 47.5, 9.5], ['San Francisco', 27, 34.5], ['La Ronda', 53, 49.5], ['San Diego', 6, 52], ['Sto. Domingo', 68, 40], ['Siete Cruces', 42.8, 33]]) {
+  for (const [txt, x, y] of [['Plaza Grande', 47.5, 9.5], ['San Francisco', 17.5, 21], ['La Ronda', 53, 49.5], ['San Diego', 6, 52], ['Sto. Domingo', 68, 40], ['Siete Cruces', 42.8, 33]]) {
     const w = textWidth(txt), px = ox + x * S - w / 2, py = oy + y * S - 5;
     rectDither(px - 1, py + 1, w + 2, 9, C.cal, 0.6); drawText(txt, px, py, C.madera0);
   }
@@ -2191,34 +2214,37 @@ function setupEntities() {
     hint() {
       if (this.done) return 'El Diablo se fue chiro: al atrio le falta una piedra.';
       if (this.state === 0) return 'Habla con Cantuña en el atrio de San Francisco.';
-      if (!INV.has('piedra')) return 'Busca la última piedra en el Callejón del Cantero (bajando por la calle Bolívar). ¡Antes de la campanada doce!';
+      if (!INV.has('piedra')) return 'Cruza la Plaza de San Francisco hacia el sur hasta la calle Bolívar: justo enfrente baja el Callejón del Cantero. La piedra está al fondo, junto al farolito. El plano (M) la marca. ¡Antes de la campanada doce!';
       return 'Esconde la piedra en el hueco bajo las gradas del atrio. ¡Ojo con los diablillos!';
     }
   });
   const cant = ent({ x: 23.3, y: 29.6, spr: SPR.cantuna, name: 'Cantuña', face: 0 });
   const diablo = ent({ x: 24.6, y: 29.6, spr: SPR.diablo, name: 'El Diablo', w: 0.44, h: 0.72, show: () => FLAGS.diablo, light: 0.9 });
-  const piedra = ent({ x: 27.6, y: 41.3, spr: SPR.piedra, w: 0.22, h: 0.16, solid: false, name: 'la piedra', prompt: 'Coger la última piedra', show: () => M1.state === 1 && !INV.has('piedra'), glow: { r: 0.2, y: 0.5, a: 0.4, c: C.oro } });
+  const piedra = ent({ x: 27.6, y: 41.3, spr: SPR.piedra, w: 0.34, h: 0.24, solid: false, name: 'la piedra', prompt: 'Coger la última piedra', show: () => M1.state === 1 && !INV.has('piedra'), glow: { r: 0.4, y: 0.5, a: 0.7, c: C.oro }, light: 0.8 });
+  ent({ x: 27.6, y: 41.3, z: 0.34, spr: SPR.chispa, w: 0.12, h: 0.12, solid: false, show: () => M1.state === 1 && !INV.has('piedra'), glow: { r: 0.25, y: 0.5, a: 0.6, c: C.oro2 } });
   const hueco = ent({ x: 25.7, y: 30.0, spr: null, solid: false, prompt: 'Esconder la piedra bajo las gradas', show: () => M1.state === 1 && INV.has('piedra') });
   const humo = ent({ x: 24.6, y: 29.6, spr: SPR.humo, w: 0.6, h: 0.6, solid: false, show: () => FLAGS.humo > 0, z: 0.1 });
   const imps = [
     [[26.5, 27], [30.5, 27], [30.5, 32.6], [26.5, 32.6]], [[29, 26.6], [29, 33.4]], [[24.5, 34.6], [33, 34.6]],
-    [[24.5, 24.6], [33, 24.6]], [[27.5, 35.5], [27.5, 38.5]]
-  ].map((path, k) => guard({ x: path[0][0], y: path[0][1], path, pingpong: k > 0, speed: 1.1 + k * 0.1, spr: SPR.diablillo, w: 0.3, h: 0.34, fov: 1.3, range: 3.4, show: () => M1.state === 1, light: 0.8, redLight: 1 }));
+    [[24.5, 24.6], [33, 24.6]], [[29.6, 29.4], [31.2, 29.4]]
+  ].map((path, k) => guard({ x: path[0][0], y: path[0][1], path, pingpong: k > 0, speed: k === 2 ? 0.9 : 1.05 + k * 0.08, spr: SPR.diablillo, w: 0.3, h: 0.34, fov: 1.1, range: 3.0, show: () => M1.state === 1, light: 0.8, redLight: 1 }));
   cant.talk = async () => {
     if (M1.done) return say('cantuna', '¡Dios le pague, taita sereno! Cada vez que pase por el atrio, acuérdese: falta una piedra, y por esa piedra sigo vivito.');
-    if (M1.state === 1) return say('cantuna', INV.has('piedra') ? '¡Ahí está la piedra! Escóndala bajo las gradas del atrio, rapidito, que ya mismo son las doce.' : '¡Apúrese, taita! Bajando por la Bolívar está el Callejón del Cantero. ¡Las campanas no esperan!');
+    if (M1.state === 1) return say('cantuna', INV.has('piedra') ? '¡Ahí está la piedra! Escóndala bajo las gradas del atrio, aquicito nomás, rapidito, que ya mismo son las doce.' : '¡Apúrese, taita! Cruce la plaza derechito al sur. Al otro lado de la calle Bolívar, ¿ve esa lucecita entre dos casas? Ese es el Callejón del Cantero. Al fondo, junto al farolito, está la piedra. Si se pierde, mire el plano con la M.');
     await talk({
       start: { w: 'cantuna', t: '¡Ay, taita sereno, qué bueno que asoma! Achachay, qué frío que hace... Venga nomás, que le cuento mi desgracia.', n: 's2' },
       s2: { w: 'cantuna', t: 'Me comprometí a terminar el atrio de San Francisco en una sola noche. Como no avanzaba, le vendí el alma al Diablo. Él y sus diablillos acabaron todito... ¡pero a las doce campanadas viene a cobrarme!', c: [{ t: '¿Y qué quiere que haga, pues?', g: 's3' }, { t: '¡Chuta! Eso le pasa por negociante.', g: 's2b' }] },
       s2b: { w: 'cantuna', t: 'Ya sé, ya sé, taitito. Pero no me deje solito, ¿ya? Que ya mismo se me va el alma.', n: 's3' },
-      s3: { w: 'cantuna', t: 'El trato dice que el Diablo se lleva mi alma si el atrio está completito. Pero yo, de vivo, escondí una piedra en el Callejón del Cantero, bajando por la calle Bolívar.', n: 's4' },
+      s3: { w: 'cantuna', t: 'El trato dice que el Diablo se lleva mi alma si el atrio está completito. Pero yo, de vivo, escondí una piedra en el Callejón del Cantero.', n: 's3b' },
+      s3b: { w: 'cantuna', t: 'Cruce la plaza derechito hacia el sur, hasta la calle Bolívar. Justo enfrente, entre dos casas, baja un callejón angostito con un farolito en la entrada. Al fondo, junto a otro farolito, está la piedra. Va a oír los golpecitos del cincel cuando esté cerca.', n: 's4' },
       s4: { w: 'cantuna', t: 'Dame trayendo esa piedra y escóndela en el hueco bajo las gradas del atrio, antes de la campanada doce. ¡Cuidado con los diablillos, que andan rondando la plaza!', c: [{ t: '¡De ley le ayudo! Ahorita mismo voy.', g: 'go', fx: () => startM1() }, { t: 'Deme un ratito para pensarlo.', g: 'later' }] },
       go: { w: 'cantuna', t: '¡Dios le pague! Vaya nomás, que ya empiezan a sonar las campanas de San Francisco...' },
       later: { w: 'cantuna', t: 'Ya, pero no se demore mucho, que el Diablo no espera a nadies.' }
     });
   };
   function startM1() {
-    M1.state = 1; M1.bells = 0; M1.bellT = 1.5; MUSIC.set('tension');
+    M1.state = 1; M1.bells = 0; M1.bellT = 1.5; M1.chiselT = 0; MUSIC.set('tension');
+    setTimeout(() => toast('Pulsa M: el plano marca la piedra'), 400);
     TIMERS_HUD.push(M1.tm = { text: () => 'Campanada ' + M1.bells + ' de 12', frac: () => M1.bells / 12, col: C.naranja });
   }
   function endM1Timer() { const i = TIMERS_HUD.indexOf(M1.tm); if (i >= 0) TIMERS_HUD.splice(i, 1); MUSIC.set('yaravi'); }
@@ -2256,6 +2282,11 @@ function setupEntities() {
     if (M1.state !== 1 || CUTSCENE) return;
     M1.bellT -= dt;
     if (M1.bellT <= 0) { M1.bellT = 11; M1.bells++; AU.bell(147, 0.6, -0.3); if (M1.bells >= 12) { M1.fail(); return; } }
+    if (!INV.has('piedra')) {
+      const d = Math.hypot(P.x - piedra.x, P.y - piedra.y);
+      M1.chiselT -= dt;
+      if (d < 9 && M1.chiselT <= 0) { M1.chiselT = 1.3; AU.chisel(0.35 * (1 - d / 10)); }
+    }
     M1.grace -= dt;
     for (const g of imps) if (M1.grace <= 0 && sees(g, P.x, P.y)) {
       M1.grace = 2.5; AU.laugh(); FLASH = 0.5; FLASH_COL = C.rojo1; toast('¡Un diablillo te vio! Te arrastró fuera de la plaza.', C.naranja);
